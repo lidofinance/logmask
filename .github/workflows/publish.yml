@@ -1,0 +1,48 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # Must match the environment of the trusted publisher on PyPI.
+    environment: release
+    permissions:
+      contents: read
+      # PyPI trusted publishing: the OIDC token replaces an API token.
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Python and Poetry
+        uses: ./.github/actions/setup
+        with:
+          python-version: '3.12'
+
+      - name: Check the tag matches the version
+        # The releases are tagged v<version>, as v0.1.3 for version = "0.1.3" in pyproject.toml.
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(poetry version -s)
+          if [ "${TAG#v}" != "$version" ]; then
+            echo "::error::The release tag $TAG does not match the version $version in pyproject.toml"
+            exit 1
+          fi
+
+      - name: Build
+        run: poetry build --no-interaction
+
+      - name: Publish to PyPI
+        run: |
+          POETRY_PYPI_TOKEN_PYPI=$(.github/scripts/pypi_oidc_token.sh pypi.org)
+          export POETRY_PYPI_TOKEN_PYPI
+          poetry publish --no-interaction --no-ansi
