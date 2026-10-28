@@ -10,16 +10,13 @@ runs:
   using: composite
   steps:
     - name: Set up Python ${{ inputs.python-version }}
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
       with:
         python-version: ${{ inputs.python-version }}
 
-    - name: Read Poetry version
-      run: echo "POETRY_VERSION=$(cat .poetry-version)" >> "$GITHUB_ENV"
-      shell: bash
-
     - name: Setup Poetry
-      run: curl -sSL https://install.python-poetry.org/ | python - && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      # pipx is preinstalled on the GitHub runners; the version is pinned by the file, no installer script is downloaded.
+      run: pipx install "poetry==$(cat .poetry-version)"
       shell: bash
 
     - name: Install dependencies

@@ -2,6 +2,12 @@ name: Linters
 
 on: pull_request
 
+permissions:
+  contents: read
+  actions: read
+  # CodeQL inside the shared workflow uploads its results.
+  security-events: write
+
 jobs:
   security:
-    uses: lidofinance/linters/.github/workflows/security.yml@master
+    uses: lidofinance/linters/.github/workflows/security.yml@ff208ca0bf93063c25becac743e1c4eb96d0aad9 # master

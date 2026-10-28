@@ -6,6 +6,9 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   tests:
     runs-on: ubuntu-latest
@@ -15,7 +18,9 @@ jobs:
         python-version: ['3.12', '3.13', '3.14']
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Setup Python and Poetry
         uses: ./.github/actions/setup
@@ -41,7 +46,9 @@ jobs:
         run: |
           python - <<'PY'
           import glob, zipfile
-          wheel = glob.glob('dist/*.whl')[0]
+          wheels = glob.glob('dist/*.whl')
+          assert len(wheels) == 1, f'expected one wheel in dist/, found {wheels}'
+          wheel = wheels[0]
           with zipfile.ZipFile(wheel) as archive:
               metadata = next(name for name in archive.namelist() if name.endswith('METADATA'))
               lines = archive.read(metadata).decode().splitlines()

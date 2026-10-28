@@ -18,7 +18,7 @@ packages = [{ include = "lido_safe_logging" }]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0"
-ruff = "^0.14"
+ruff = "^0.17"
 pyright = "^1.1"
 structlog = ">=24.1"
 
