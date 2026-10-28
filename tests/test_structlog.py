@@ -44,6 +44,16 @@ def test_processor_before_the_renderer_masks_nested_values():
     assert_no_secret(stream.getvalue())
 
 
+def test_processor_before_the_renderer_keeps_the_container_types():
+    processor = mask_secrets_processor(SecretsMasker(SECRETS))
+
+    event = processor(None, 'info', {'set': {KEY, 'x'}, 'frozen': frozenset({RPC}), 'pair': (KEY, 1), 'list': [KEY]})
+
+    assert event == {'set': {MASKED_VALUE, 'x'}, 'frozen': frozenset({MASKED_VALUE}), 'pair': (MASKED_VALUE, 1), 'list': [MASKED_VALUE]}
+    assert isinstance(event['frozen'], frozenset)
+    assert isinstance(event['pair'], tuple)
+
+
 def test_processor_handles_bytes_and_leaves_other_types():
     processor = mask_secrets_processor(SecretsMasker(SECRETS))
 

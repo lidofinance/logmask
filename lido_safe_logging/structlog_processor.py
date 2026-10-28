@@ -10,8 +10,9 @@ def mask_secrets_processor(masker: SecretsMasker) -> Processor:
     """A structlog processor that masks the event.
 
     Put it last, after the renderer: it then masks the rendered line, keys and JSON-escaped forms included.
-    Before the renderer it masks the string values of the event dict, nested lists and dicts too.
-    The module does not import structlog; install the `structlog` extra to pin a tested version.
+    Before the renderer it masks the string values of the event dict, nested lists, tuples, sets and dicts too.
+    The module does not import structlog: the processor is a plain function with the `(logger, method_name,
+    event_dict)` contract, the service brings its own structlog.
     """
 
     def processor(logger: Any, method_name: str, event: Any) -> Any:
@@ -29,6 +30,10 @@ def _mask(masker: SecretsMasker, value: Any) -> Any:
         return value if masked == text else masked.encode('utf-8', errors='surrogateescape')
     if isinstance(value, Mapping):
         return {key: _mask(masker, item) for key, item in value.items()}
-    if isinstance(value, list | tuple):
+    if isinstance(value, list):
         return [_mask(masker, item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_mask(masker, item) for item in value)
+    if isinstance(value, set | frozenset):
+        return type(value)(_mask(masker, item) for item in value)
     return value
