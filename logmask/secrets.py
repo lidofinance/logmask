@@ -10,7 +10,7 @@ from urllib.parse import quote, quote_plus, unquote, unquote_plus, urlsplit
 
 MASKED_VALUE = '***'
 # Every line the library writes on its own behalf, instead of the record, starts with this tag.
-LIBRARY_TAG = '[lido-safe-logging]'
+LIBRARY_TAG = '[logmask]'
 # Every private value is masked whole, whatever its length. A standalone fragment of a private URL (the host, one
 # path segment, one query value) is masked on its own only when it can be a key: 16 characters or more, or 8 or more
 # with a digit. The whole URL, the whole path, the whole query and the user:password are masked without any

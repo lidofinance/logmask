@@ -8,9 +8,9 @@ from collections.abc import Iterator
 
 import pytest
 
-from lido_safe_logging.excepthook import install_excepthook
-from lido_safe_logging.formatter import JsonFormatter
-from lido_safe_logging.secrets import SecretsMasker
+from logmask.excepthook import install_excepthook
+from logmask.formatter import JsonFormatter
+from logmask.secrets import SecretsMasker
 from tests.conftest import RPC, SECRETS, assert_no_secret
 
 MASKER = SecretsMasker(SECRETS)
@@ -160,7 +160,7 @@ def test_a_failure_inside_the_hook_prints_one_masked_line_and_does_not_raise(cap
     sys.excepthook(type(error), error, error.__traceback__)
 
     report = capsys.readouterr().err
-    assert '[lido-safe-logging] ConnectionError could not be logged' in report
+    assert '[logmask] ConnectionError could not be logged' in report
     assert 'Traceback' not in report
     assert_no_secret(report)
 

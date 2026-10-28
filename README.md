@@ -1,4 +1,4 @@
-# lido-safe-logging
+# logmask
 
 JSON logging for Python services, with secrets masked. Every log line is one JSON object. Every line goes through a masker that replaces every form of your secret values with `***`. This includes the messages of third-party libraries, warnings, and the traceback of an unhandled exception.
 
@@ -7,7 +7,7 @@ No runtime dependencies. Python 3.12 or newer.
 ## Install
 
 ```bash
-poetry add git+https://github.com/lidofinance/lido-safe-logging.git@v0.1.0
+poetry add git+https://github.com/lidofinance/logmask.git@v0.1.0
 ```
 
 Pin a tag, or a commit with `rev`, and commit `poetry.lock`: it records the exact commit. Poetry clones the repository itself; a build stage that installs with `pip` needs `git`.
@@ -17,7 +17,7 @@ Pin a tag, or a commit with `rev`, and commit `poetry.lock`: it records the exac
 ```py
 import logging
 
-from lido_safe_logging import masked_config, setup_logging
+from logmask import masked_config, setup_logging
 
 PUBLIC = {'RPC_TIMEOUT': 30, 'DRY_RUN': True}
 PRIVATE = {'RPC_URL': 'https://rpc.example.com/v3/a1b2c3d4e5f6', 'API_TOKEN': 'tok_9f8e7d6c5b4a'}
@@ -113,7 +113,7 @@ Call `setup_logging` as well: structlog does not route the standard-library logg
 ```py
 import structlog
 
-from lido_safe_logging import mask_secrets_processor, setup_logging
+from logmask import mask_secrets_processor, setup_logging
 
 masker = setup_logging(PRIVATE)
 structlog.configure(
@@ -263,11 +263,11 @@ A short word of a URL on its own (see above). Text that does not pass through th
 
 ## When logging itself fails
 
-A record that cannot be formatted (wrong `%` arguments, a value `json` cannot serialize) is still written as one masked JSON line, with the problem in the `error` field. Every line the library writes on its own behalf, instead of the record, starts with `[lido-safe-logging]`:
+A record that cannot be formatted (wrong `%` arguments, a value `json` cannot serialize) is still written as one masked JSON line, with the problem in the `error` field. Every line the library writes on its own behalf, instead of the record, starts with `[logmask]`:
 
 ```py
 logger.info('rpc %d %s', 'https://rpc.example.com/v3/a1b2c3d4e5f6', 'x')
-# {..., "msg": "rpc %d %s", "error": "[lido-safe-logging] Log record could not be formatted: TypeError('%d format: a real number is required, not str')", "args": "('***', 'x')"}
+# {..., "msg": "rpc %d %s", "error": "[logmask] Log record could not be formatted: TypeError('%d format: a real number is required, not str')", "args": "('***', 'x')"}
 ```
 
 The standard library would print this instead, to stderr and without masking:
@@ -284,7 +284,7 @@ Arguments: ('https://rpc.example.com/v3/a1b2c3d4e5f6', 'x')
 A record that cannot be written (the stream is closed, the pipe is broken) is reported by `SafeStreamHandler` without the record, where the standard handler would print the same `Message:` and `Arguments:` lines as above:
 
 ```text
---- [lido-safe-logging] Logging error: BrokenPipeError(32, 'Broken pipe') (record from app, /app/main.py:31) ---
+--- [logmask] Logging error: BrokenPipeError(32, 'Broken pipe') (record from app, /app/main.py:31) ---
 ```
 
 An unhandled exception goes through the logger as a CRITICAL line:
@@ -316,7 +316,7 @@ Every line has these fields, in this order:
 
 ```bash
 poetry install
-poetry run ruff format --check . && poetry run ruff check . && poetry run pyright lido_safe_logging tests
+poetry run ruff format --check . && poetry run ruff check . && poetry run pyright logmask tests
 poetry run pytest
 ```
 

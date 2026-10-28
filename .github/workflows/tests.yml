@@ -34,7 +34,7 @@ jobs:
         run: poetry run ruff check .
 
       - name: Types
-        run: poetry run pyright lido_safe_logging tests
+        run: poetry run pyright logmask tests
 
       - name: Tests
         run: poetry run pytest

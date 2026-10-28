@@ -1,9 +1,9 @@
 import io
 import logging
 
-from lido_safe_logging.formatter import JsonFormatter
-from lido_safe_logging.handler import SafeStreamHandler
-from lido_safe_logging.secrets import SecretsMasker
+from logmask.formatter import JsonFormatter
+from logmask.handler import SafeStreamHandler
+from logmask.secrets import SecretsMasker
 from tests.conftest import KEY, SECRETS, assert_no_secret, make_record
 
 
@@ -28,7 +28,7 @@ def test_write_failure_does_not_print_the_record(capsys):
     make_handler().handle(record)
 
     report = capsys.readouterr().err
-    assert '[lido-safe-logging] Logging error' in report
+    assert '[logmask] Logging error' in report
     assert 'Broken pipe' in report
     assert 'conftest.py:1' in report
     assert 'key %s' not in report

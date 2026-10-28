@@ -1,5 +1,5 @@
 [project]
-name = "lido-safe-logging"
+name = "logmask"
 version = "0.1.0"
 description = "JSON logging with masked secrets for Python services"
 readme = "README.md"
@@ -11,10 +11,10 @@ requires-python = ">=3.12,<4"
 dependencies = []
 
 [project.urls]
-Repository = "https://github.com/lidofinance/lido-safe-logging"
+Repository = "https://github.com/lidofinance/logmask"
 
 [tool.poetry]
-packages = [{ include = "lido_safe_logging" }]
+packages = [{ include = "logmask" }]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0"
@@ -52,7 +52,7 @@ indent-style = "space"
 docstring-code-format = true
 
 [tool.pyright]
-include = ["lido_safe_logging", "tests"]
+include = ["logmask", "tests"]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
 

@@ -18,7 +18,7 @@ def test_package_declares_no_runtime_dependencies():
 
 def test_package_imports_only_the_standard_library():
     third_party = []
-    for module in (ROOT / 'lido_safe_logging').glob('*.py'):
+    for module in (ROOT / 'logmask').glob('*.py'):
         for line in module.read_text().splitlines():
             if line.startswith(('import ', 'from ')) and not line.startswith('from .'):
                 name = line.split()[1].split('.')[0]

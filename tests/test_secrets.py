@@ -5,7 +5,7 @@ from urllib.parse import quote
 
 import pytest
 
-from lido_safe_logging.secrets import MASKED_VALUE, SecretsMasker
+from logmask.secrets import MASKED_VALUE, SecretsMasker
 from tests.conftest import CL_URL, KEY, RPC, RPC_2, SECRETS, assert_no_secret
 
 

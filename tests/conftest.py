@@ -5,7 +5,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from lido_safe_logging import configure
+from logmask import configure
 
 KEY = '0x' + 'ab' * 32
 RPC = 'https://rpc.example/v3/secret-key-1/'

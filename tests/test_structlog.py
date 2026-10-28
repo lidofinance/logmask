@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from lido_safe_logging.secrets import MASKED_VALUE, SecretsMasker
-from lido_safe_logging.structlog_processor import mask_secrets_processor
+from logmask.secrets import MASKED_VALUE, SecretsMasker
+from logmask.structlog_processor import mask_secrets_processor
 from tests.conftest import KEY, RPC, SECRETS, assert_no_secret
 
 structlog = pytest.importorskip('structlog')

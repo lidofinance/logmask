@@ -7,9 +7,9 @@ import warnings
 
 import pytest
 
-from lido_safe_logging.configure import setup_logging
-from lido_safe_logging.handler import SafeStreamHandler
-from lido_safe_logging.secrets import MASKED_VALUE, SecretsMasker
+from logmask.configure import setup_logging
+from logmask.handler import SafeStreamHandler
+from logmask.secrets import MASKED_VALUE, SecretsMasker
 from tests.conftest import KEY, RPC, SECRETS, assert_no_secret
 
 
@@ -97,13 +97,13 @@ def test_setup_logging_accepts_a_level_name_in_any_case(restore_logging):
 
 
 def test_the_masker_and_the_secrets_are_required():
-    import lido_safe_logging
-    from lido_safe_logging import JsonFormatter, SafeStreamHandler, install_excepthook
+    import logmask
+    from logmask import JsonFormatter, SafeStreamHandler, install_excepthook
 
     for call in (JsonFormatter, SafeStreamHandler, install_excepthook, setup_logging):
         with pytest.raises(TypeError):
             call()  # type: ignore[call-arg]
-    assert set(lido_safe_logging.__all__) == {
+    assert set(logmask.__all__) == {
         'MASKED_VALUE',
         'JsonFormatter',
         'SafeStreamHandler',

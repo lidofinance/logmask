@@ -1,7 +1,7 @@
 import pytest
 
-from lido_safe_logging.config import masked_config
-from lido_safe_logging.secrets import MASKED_VALUE
+from logmask.config import masked_config
+from logmask.secrets import MASKED_VALUE
 from tests.conftest import SECRETS, assert_no_secret
 
 PUBLIC = {'LIDO_LOCATOR': '0xC1d0b3DE6792Bf6b4b37EccdcC24e45978Cfd2Eb', 'PROMETHEUS_PORT': 9000, 'DRY_RUN': False}
