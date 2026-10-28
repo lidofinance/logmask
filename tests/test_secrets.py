@@ -30,13 +30,97 @@ def test_secret_values_cover_url_path_query_password_and_userinfo():
     assert '/eth' not in values
 
 
-def test_basic_auth_url_keeps_its_path_readable():
-    values = secret_values({'CL': 'https://user:secret-pass-3@cl.example/eth/v1/beacon?slot=1234567'})
+def test_url_route_without_a_key_like_segment_stays_readable():
+    # A route (/eth/v1/beacon) is not a secret: masked, it would hide the request path in every line.
+    for url in ('https://user:secret-pass-3@cl.example/eth/v1/beacon?slot=1234567', 'https://cl.example/eth/v1/beacon/'):
+        values = secret_values({'CL': url})
 
-    assert 'secret-pass-3' in values
-    assert 'user:secret-pass-3' in values
-    assert '/eth/v1/beacon' not in values
-    assert 'slot=1234567' not in values
+        assert '/eth/v1/beacon' not in values
+        assert '/eth/v1/beacon/' not in values
+        assert 'slot=1234567' not in values
+        assert SecretsMasker({'CL': url}).mask('GET /eth/v1/beacon/genesis') == 'GET /eth/v1/beacon/genesis'
+
+
+def test_url_with_basic_auth_masks_a_key_like_path_and_query():
+    url = 'https://user:secret-pass-3@rpc.example/v3/secret-key-1?apikey=secret-key-2&slot=1'
+    masker = SecretsMasker({'RPC': url})
+
+    masked = masker.mask(f'GET {url} | /v3/secret-key-1 | secret-key-1 | apikey=secret-key-2 | secret-key-2 | slot=1')
+
+    assert masked == f'GET {MASKED_VALUE} | {MASKED_VALUE} | {MASKED_VALUE} | {MASKED_VALUE} | {MASKED_VALUE} | slot=1'
+    assert 'secret-pass-3' in masker.values
+    assert 'user:secret-pass-3' in masker.values
+
+
+def test_percent_encoded_url_parts_are_masked_decoded_too():
+    masker = SecretsMasker({'CL': 'https://user:p%40ss-word-3@cl.example/', 'RPC': 'https://rpc.example/v3/key%2Fwith-slash-1'})
+
+    assert masker.mask('auth p@ss-word-3 and p%40ss-word-3') == f'auth {MASKED_VALUE} and {MASKED_VALUE}'
+    assert masker.mask('path /v3/key/with-slash-1') == f'path {MASKED_VALUE}'
+
+
+def test_bytes_and_numbers_are_masked_by_their_text_and_hex_forms():
+    masker = SecretsMasker({'KEY': b'supersecretbytes', 'RAW': bytes.fromhex('a1b2c3d4e5f6a7b8'), 'PIN': 12345678})
+
+    assert masker.mask('supersecretbytes 0x73757065727365637265746279746573') == f'{MASKED_VALUE} {MASKED_VALUE}'
+    assert masker.mask('0xa1b2c3d4e5f6a7b8 A1B2C3D4E5F6A7B8') == f'{MASKED_VALUE} {MASKED_VALUE}'
+    assert masker.mask('pin 12345678') == f'pin {MASKED_VALUE}'
+
+
+def test_hex_secret_is_masked_in_both_cases_with_and_without_the_prefix():
+    masker = SecretsMasker({'KEY': '0xABCDEF0123456789'})
+
+    assert masker.mask('0xabcdef0123456789 abcdef0123456789 0XABCDEF0123456789') == f'{MASKED_VALUE} {MASKED_VALUE} 0X{MASKED_VALUE}'
+    assert KEY.upper().replace('0X', '0x') in SecretsMasker({'KEY': KEY}).values
+
+
+def test_repr_and_json_forms_of_a_secret_are_masked():
+    secret = 'pa"ss\\w\nordé-value'
+    masker = SecretsMasker({'PASSWORD': secret})
+
+    for text in (repr(secret), str({'p': secret}), json.dumps({'p': secret}), str(KeyError(secret))):
+        for line in (text, json.dumps({'msg': text})):
+            masked = masker.mask(line)
+
+            assert 'ord' not in masked, masked
+            assert MASKED_VALUE in masked
+
+
+def test_overlapping_secrets_are_masked_as_one_span():
+    masker = SecretsMasker({'A': 'abcdefgh', 'B': 'efghijklmnop'})
+
+    assert masker.mask('x abcdefghijklmnop y abcdefgh z efghijklmnop') == f'x {MASKED_VALUE} y {MASKED_VALUE} z {MASKED_VALUE}'
+
+
+def test_empty_variant_is_never_a_secret():
+    assert SecretsMasker({'A': '', 'B': '/'}, min_length=0).mask('abc') == 'abc'
+    assert '' not in secret_values({'A': ''}, min_length=0)
+
+
+def test_self_referencing_structure_does_not_recurse_forever():
+    loop: dict[str, object] = {}
+    loop['self'] = loop
+    loop['list'] = [loop, 'secret-in-loop-1']
+
+    assert SecretsMasker({'A': loop}).mask('secret-in-loop-1') == MASKED_VALUE
+
+
+def test_add_masks_new_secrets_and_keeps_the_old_ones():
+    masker = SecretsMasker({'A': 'first-secret-1'})
+    masker.add({'B': 'second-secret-2'})
+    masker.add({'B': 'third-secret-3'})
+
+    assert masker.mask('first-secret-1 second-secret-2 third-secret-3') == f'{MASKED_VALUE} {MASKED_VALUE} {MASKED_VALUE}'
+
+
+def test_add_does_not_grow_the_values_when_the_same_secret_is_added_again():
+    masker = SecretsMasker({'TOKEN': 'pa"ss\\word/123'})
+    before = masker.values
+
+    masker.add({'TOKEN': 'pa"ss\\word/123'})
+    masker.add({'OTHER': 'pa"ss\\word/123'})
+
+    assert masker.values == before
 
 
 def test_token_as_url_username_is_masked():
@@ -147,9 +231,18 @@ def test_secrets_from_env_picks_marker_names_and_drops_empty():
         'EMPTY_SECRET': '',
         'PROMETHEUS_PORT': '9000',
         'LIDO_LOCATOR': '0xC1d0',
+        # A marker inside a longer word is not a marker: these are public URLs.
+        'KEYS_API_URL': 'https://keys.example',
+        'COMPASS_URL': 'https://compass.example',
+        'DB_PASS': 'pass-value-2',
     }
 
-    assert secrets_from_env(environ) == {'WALLET_PRIVATE_KEY': KEY, 'API_TOKEN': 'token-value', 'db_password': 'pass-value'}
+    assert secrets_from_env(environ) == {
+        'WALLET_PRIVATE_KEY': KEY,
+        'API_TOKEN': 'token-value',
+        'db_password': 'pass-value',
+        'DB_PASS': 'pass-value-2',
+    }
 
 
 def test_secrets_from_env_reads_os_environ_by_default(monkeypatch):
