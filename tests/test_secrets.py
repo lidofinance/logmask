@@ -180,10 +180,54 @@ def test_mapping_values_dataclass_fields_and_wrapped_secrets_are_secrets_too():
         def get_secret_value(self) -> str:
             return 'wrapped-secret-7'
 
-    masker = SecretsMasker({'NESTED': {'token': {'inner': RPC}}, 'DB': Credentials('db-user-5', 'db-pass-6'), 'JWT': Wrapped()})
+    masker = SecretsMasker({'NESTED': {'level': {'inner': RPC}}, 'DB': Credentials('db-user-5', 'db-pass-6'), 'JWT': Wrapped()})
 
     assert masker.mask(f'{RPC} db-user-5 db-pass-6 wrapped-secret-7') == ' '.join([MASKED_VALUE] * 4)
-    assert masker.mask('token inner **********') == 'token inner **********'
+    assert masker.mask('NESTED DB JWT **********') == 'NESTED DB JWT **********'
+
+
+def test_keys_of_a_nested_mapping_are_secrets_and_the_top_level_keys_are_names():
+    # A nested mapping may be keyed by the secret itself ({key: label}); the top-level keys are the variable names.
+    masker = SecretsMasker({'KEYS': {'nested-key-1': 'label-1', ('tuple-key-2',): {'deeper-key-3': None}}})
+
+    assert masker.mask('KEYS nested-key-1 label-1 tuple-key-2 deeper-key-3') == 'KEYS ' + ' '.join([MASKED_VALUE] * 4)
+
+
+@pytest.mark.parametrize('separator', [',', ';', ' ', '\n', ', ', ' ;\t'])
+def test_a_string_with_several_urls_is_searched_url_by_url(separator):
+    masker = SecretsMasker({'RPC': separator.join([RPC, RPC_2])})
+
+    assert masker.mask(f'connect {RPC} and {RPC_2}') == f'connect {MASKED_VALUE} and {MASKED_VALUE}'
+    assert masker.mask('url /v3/secret-key-1 and /v3/secret-key-2') == f'url {MASKED_VALUE} and {MASKED_VALUE}'
+    assert masker.mask('key secret-key-1 and secret-key-2') == f'key {MASKED_VALUE} and {MASKED_VALUE}'
+
+
+def test_a_single_url_and_a_list_of_plain_words_are_not_split():
+    masker = SecretsMasker({'RPC': RPC, 'WORDS': 'alpha, beta'})
+
+    assert masker.mask('alpha beta alpha, beta') == f'alpha beta {MASKED_VALUE}'
+    assert masker.mask(f'{RPC}') == MASKED_VALUE
+
+
+def test_a_json_string_is_searched_as_the_container_it_encodes():
+    account = json.dumps(
+        {'type': 'service_account', 'private_key': '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg\n-----END PRIVATE KEY-----\n'}
+    )
+    masker = SecretsMasker({'RPC': json.dumps([RPC, RPC_2]), 'ACCOUNT': account, 'NOT_JSON': '[not json'})
+
+    assert masker.mask(f'connect {RPC} path /v3/secret-key-2') == f'connect {MASKED_VALUE} path {MASKED_VALUE}'
+    assert masker.mask('key MIIEvQIBADANBg of type service_account') == f'key {MASKED_VALUE} of {MASKED_VALUE} {MASKED_VALUE}'
+    assert masker.mask(f'{account} [not json') == f'{MASKED_VALUE} {MASKED_VALUE}'
+
+
+def test_every_line_of_a_multi_line_value_is_a_secret():
+    masker = SecretsMasker({'PEM': '-----BEGIN KEY-----\nline-one-1\n  line-two-2  \n\n-----END KEY-----\n'})
+
+    assert (
+        masker.mask('got line-one-1 then line-two-2 after -----BEGIN KEY-----')
+        == f'got {MASKED_VALUE} then {MASKED_VALUE} after {MASKED_VALUE}'
+    )
+    assert masker.mask('plain line') == 'plain line'
 
 
 def test_add_masks_new_secrets_and_keeps_the_old_ones():
@@ -300,24 +344,38 @@ def test_form_encoded_and_percent_encoded_secrets_are_masked_decoded_and_encoded
     )
 
 
-def test_other_iterables_and_objects_are_searched_for_secrets():
+def test_other_iterables_are_searched_for_secrets():
     from collections import deque
 
-    class Config:
-        def __init__(self) -> None:
-            self.key = 'object-secret-1'
+    masker = SecretsMasker({'D': deque(['deque-secret-1']), 'I': iter(['iter-secret-1']), 'M': memoryview(b'view-secret-1')})
 
-    masker = SecretsMasker({'D': deque(['deque-secret-1']), 'I': iter(['iter-secret-1']), 'O': Config(), 'M': memoryview(b'view-secret-1')})
-
-    assert masker.mask('deque-secret-1 iter-secret-1 object-secret-1 view-secret-1') == ' '.join([MASKED_VALUE] * 4)
+    assert masker.mask('deque-secret-1 iter-secret-1 view-secret-1') == ' '.join([MASKED_VALUE] * 3)
 
 
-def test_a_value_that_cannot_be_searched_is_refused():
-    class Opaque:
-        __slots__ = ('x',)
+class Opaque:
+    __slots__ = ('x',)
 
-    with pytest.raises(TypeError, match='Opaque'):
-        SecretsMasker({'O': Opaque()})
+
+class Config:
+    def __init__(self) -> None:
+        self.key = 'object-secret-1'
+
+
+@pytest.mark.parametrize(
+    'value',
+    [Opaque(), Config(), Config, lambda: 'closure-secret-1', pytest, object()],
+    ids=['slots', 'object', 'class', 'function', 'module', 'plain'],
+)
+def test_a_value_of_an_unsupported_type_is_refused_at_init_and_in_add(value):
+    # A plain object is searched through neither its __dict__ nor its slots: the masker cannot promise that it finds
+    # every secret inside (a closure, a property, a slot), so it refuses the value instead of masking a part.
+    with pytest.raises(TypeError, match=f'{type(value).__name__} is not supported'):
+        SecretsMasker({'O': value})
+    masker = SecretsMasker({})
+    with pytest.raises(TypeError, match='pass str, bytes'):
+        masker.add({'O': value})
+    with pytest.raises(TypeError, match='is not supported'):
+        masker.add({'nested': {'inner': [value]}})
 
 
 def test_masking_works_on_non_ascii_text_too():
@@ -420,19 +478,12 @@ def test_cycles_through_dataclasses_objects_and_iterables_stop():
         secret: str
         next: object = None
 
-    class Holder:
-        def __init__(self) -> None:
-            self.secret = 'object-cycle-1'
-            self.me = self
-
     node = Node('dataclass-cycle-1')
     node.next = node
     ring: deque[object] = deque(['deque-cycle-1'])
     ring.append(ring)
 
-    assert SecretsMasker({'A': node, 'B': Holder(), 'C': ring}).mask('dataclass-cycle-1 object-cycle-1 deque-cycle-1') == ' '.join(
-        [MASKED_VALUE] * 3
-    )
+    assert SecretsMasker({'A': node, 'C': ring}).mask('dataclass-cycle-1 deque-cycle-1') == ' '.join([MASKED_VALUE] * 2)
 
 
 def test_containers_inside_dataclass_fields_wrapped_values_and_iterables_are_searched():

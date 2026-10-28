@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from typing import Any
 
-from .secrets import MASKED_VALUE
+from .secrets import MASKED_VALUE, check_private_value
 
 
 def masked_config(public: Mapping[str, Any], private: Mapping[str, Any]) -> dict[str, Any]:
@@ -9,11 +9,14 @@ def masked_config(public: Mapping[str, Any], private: Mapping[str, Any]) -> dict
 
     A private list keeps its length, and an unset private value (None or an empty string) becomes an empty string, so
     the log shows which variables are set without reading their values. Any other value, `0` and `False` included, is
-    set and shows the placeholder. A variable in both mappings is an error.
+    set and shows the placeholder. A variable in both mappings is an error, and so is a private value of a type the
+    masker cannot search for secrets, the same error `setup_logging` raises.
     """
     overlap = sorted(set(public) & set(private))
     if overlap:
         raise ValueError(f'Variables listed as both public and private: {overlap}')
+    for value in private.values():
+        check_private_value(value)
 
     return {**public, **{key: _mask(value) for key, value in private.items()}}
 

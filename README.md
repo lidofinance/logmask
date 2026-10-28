@@ -7,7 +7,7 @@ No runtime dependencies. Python 3.12 or newer.
 ## Install
 
 ```bash
-poetry add git+https://github.com/lidofinance/logmask.git@v0.1.2
+poetry add git+https://github.com/lidofinance/logmask.git@v0.1.3
 ```
 
 Pin a tag, or a commit with `rev`, and commit `poetry.lock`: it records the exact commit. Poetry clones the repository itself; a build stage that installs with `pip` needs `git`.
@@ -43,14 +43,14 @@ Output (one line per record, stderr):
 - routes `warnings.warn()` through the logger, so a warning text is masked too
 - installs `sys.excepthook`, `threading.excepthook` and `sys.unraisablehook`, so an unhandled exception becomes one CRITICAL line with a masked traceback
 
-`masked_config(PUBLIC, PRIVATE)` builds a dict for the startup log. Public values stay as they are. Private values become `***`. A private list keeps its length. An unset private value (`None`, `''` or `b''`) becomes `''`, so you can see which variables are set; any other value, `0` and `False` included, is set and shows `***`. A key present in both dicts raises `ValueError`.
+`masked_config(PUBLIC, PRIVATE)` builds a dict for the startup log. Public values stay as they are. Private values become `***`. A private list keeps its length. An unset private value (`None`, `''` or `b''`) becomes `''`, so you can see which variables are set; any other value, `0` and `False` included, is set and shows `***`. A key present in both dicts raises `ValueError`, and a private value of a type the masker cannot search raises `TypeError` (see "What is masked").
 
 ```py
 masked_config({'PORT': 9000}, {'TOKEN': 'abc', 'RPC_URLS': ['a', 'b'], 'OPTIONAL_KEY': None})
 # {'PORT': 9000, 'TOKEN': '***', 'RPC_URLS': ['***', '***'], 'OPTIONAL_KEY': ''}
 ```
 
-Every value of `PRIVATE` is treated as a secret, whatever it looks like (`None` and booleans are not values). Put a variable there only when its value must never appear in a log: a value such as `true` or `9000` in `PRIVATE` would be masked inside every line, field names included. A realistic set of secrets (the 17 variables of the oracle, about 100 forms) costs about 50 microseconds per line; hundreds of secrets make every line noticeably slower.
+Every value of `PRIVATE` is treated as a secret, whatever it looks like (`None` and booleans are not values). Put a variable there only when its value must never appear in a log: a value such as `true` or `9000` in `PRIVATE` would be masked inside every line, field names included. A realistic set of secrets (about 20 variables, about 100 forms) costs about 50 microseconds per line; hundreds of secrets make every line noticeably slower.
 
 ## How to
 
@@ -148,22 +148,37 @@ masker = SecretsMasker(
         'CL_URL': 'https://user:s3cretPassw0rd@beacon.example.com/',
         'API_TOKEN': 'tok_9f8e7d6c5b4a\n',  # read from a file, with the trailing newline
         'RPC_LIST': ['https://one.example.com/key/abcdef123456', 'https://two.example.com/key/ghijkl789012'],
-        'NESTED': {'inner': {'token': 'nested-secret-value'}},
+        'KEYS': {'nested-secret-key': 'nested-secret-value'},
         'PRIVATE_KEY': '0xABCDEF0123456789',
         'RAW_KEY': b'\xde\xad\xbe\xef\x01\x02\x03\x04',
     }
 )
 ```
 
-Each value, each item of a list, tuple, set, nested dict or any other iterable (the keys of a dict are names, they stay), the fields of a dataclass or of any object, the value behind a `SecretStr`-like object (`get_secret_value()`), numbers and paths by their text:
+Each value, each item of a list, tuple, set or any other iterable, the keys and the values of a nested dict (only the top-level keys are the variable names, they stay), the fields of a dataclass, the value behind a `SecretStr`-like object (`get_secret_value()`), numbers and paths by their text:
 
 ```py
 masker.mask('connect https://rpc.example.com/v3/a1b2c3d4e5f6/')
 # 'connect ***'
 masker.mask('rpc https://two.example.com/key/ghijkl789012 failed')
 # 'rpc *** failed'
-masker.mask('got nested-secret-value')
-# 'got ***'
+masker.mask('KEYS nested-secret-key nested-secret-value')
+# 'KEYS *** ***'
+```
+
+A value of any other type (a plain object, a function, a module, a class) raises `TypeError` in `setup_logging`, `SecretsMasker`, `add()` and `masked_config`: the masker cannot promise to find every secret inside it, so it refuses the value instead of masking a part. Pass the data of such an object as a dict.
+
+The values held by one string: a JSON document is searched as the container it encodes (a list of URLs, the JSON of a service account with its `private_key`), several URLs separated by commas, semicolons or white space are searched one by one, and every line of a multi-line value (a PEM key) is a secret on its own:
+
+```py
+masker = SecretsMasker({'RPC_LIST': 'https://one.example.com/key/abcdef123456,https://two.example.com/key/ghijkl789012'})
+masker.mask('rpc https://one.example.com/key/abcdef123456 failed, path /key/abcdef123456')
+# 'rpc *** failed, path ***'
+masker = SecretsMasker(
+    {'ACCOUNT': '{"type": "service_account", "private_key": "-----BEGIN KEY-----\\nMIIEvQIBADANBg\\n-----END KEY-----"}'}
+)
+masker.mask('key MIIEvQIBADANBg of type service_account')
+# 'key *** of *** ***'
 ```
 
 The value without spaces and newlines around it, and without a trailing `/`:
@@ -259,11 +274,20 @@ masker.mask('prefix a1b2c3')
 # 'prefix a1b2c3'
 ```
 
-A short word of a URL on its own (see above). Text that does not pass through the root logger: `print`, a library that writes to the stream directly, a logger with its own handler that does not propagate to the root logger, and the message of `sys.exit('...')`, which the interpreter prints without calling the exception hook.
+A short word of a URL on its own (see above).
+
+A password re-encoded by an HTTP library with its own set of safe characters. The masker knows the password raw, percent-decoded and in the three encodings of `urllib.parse` (`quote` with and without the default safe characters, `quote_plus`). yarl, used by aiohttp, keeps `+ ! & =` raw and encodes the rest, so `p%40ss+x!y` is a form the masker does not know, and only the user name and the host of such a URL are masked. A per-character pattern for the credentials (each character raw or percent-encoded) is planned; until then, prefer a password without characters that need encoding.
+
+Text that does not pass through the handler installed by `setup_logging`:
+
+- `print`, a library that writes to the stream directly, and the message of `sys.exit('...')`, which the interpreter prints without calling the exception hook
+- a logger with its own handler that does not propagate to the root logger (a logger without any handler that does not propagate goes to `logging.lastResort`, which `setup_logging` replaces by a masked handler)
+- a handler added to the root logger after `setup_logging` (a `FileHandler`, the handler of an error tracker), and a `logging.config.dictConfig` call after it: they format the record themselves
+- a child process of `multiprocessing`: with the `fork` start method, an exception in the child is printed by `multiprocessing` itself, without the hooks; with `spawn`, the child starts without `setup_logging` unless its module calls it
 
 ## When logging itself fails
 
-A record that cannot be formatted (wrong `%` arguments, a value `json` cannot serialize) is still written as one masked JSON line, with the problem in the `error` field. Every line the library writes on its own behalf, instead of the record, starts with `[logmask]`:
+A record that cannot be formatted (wrong `%` arguments, a value `json` cannot serialize, a dict message nested deeper than the recursion limit) is still written as one masked JSON line, with the problem in the `error` field. Every line the library writes on its own behalf, instead of the record, starts with `[logmask]`:
 
 ```py
 logger.info('rpc %d %s', 'https://rpc.example.com/v3/a1b2c3d4e5f6', 'x')

@@ -54,6 +54,25 @@ def test_setup_logging_with_an_empty_mapping_masks_nothing_until_add(restore_log
     assert isinstance(logging.getLogger().handlers[0], SafeStreamHandler)
 
 
+def test_a_logger_without_handlers_that_does_not_propagate_is_masked_too(restore_logging):
+    stream = io.StringIO()
+    setup_logging(SECRETS, stream=stream)
+    isolated = logging.getLogger('isolated-logger')
+    isolated.propagate = False
+
+    isolated.warning('cannot reach %s', RPC)
+    isolated.info('below the level of the last resort %s', RPC)
+
+    lines = stream.getvalue().splitlines()
+    assert [json.loads(line)['msg'] for line in lines] == [f'cannot reach {MASKED_VALUE}']
+    assert isinstance(logging.lastResort, SafeStreamHandler)
+
+
+def test_setup_logging_refuses_a_secret_of_an_unsupported_type(restore_logging):
+    with pytest.raises(TypeError, match='object is not supported'):
+        setup_logging({'OPAQUE': object()})
+
+
 def test_setup_logging_installs_the_exception_hooks(restore_logging):
     hooks_before = sys.excepthook, threading.excepthook, sys.unraisablehook
 

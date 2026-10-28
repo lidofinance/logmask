@@ -142,10 +142,36 @@ def _escaped_forms(text: str) -> set[str]:
     return forms
 
 
+SUPPORTED_TYPES = 'str, bytes, a number, a path, a mapping, a list or another iterable, a dataclass or an object with get_secret_value()'
+
+
+def _strings_inside(text: str, seen: dict[int, object]) -> Iterator[str]:
+    """The values held by one string: a JSON document (a list of URLs, the JSON of a service account) is searched as
+    the container it encodes, several URLs separated by commas, semicolons or white space are searched one by one
+    (otherwise only the last URL would get its parts, the others would be plain prefixes of the value), and every
+    line of a multi-line value (a PEM key) is a secret on its own, as a library prints it line by line."""
+    if text.lstrip()[:1] in ('[', '{'):
+        try:
+            document = json.loads(text)
+        except ValueError:
+            document = None
+        if isinstance(document, list | dict):
+            yield from _strings(document, seen)
+            return
+    urls = [piece for piece in re.split(r'[,;\s]+', text) if '://' in piece]
+    if len(urls) > 1:
+        yield from urls
+    lines = [line.strip() for line in text.splitlines()]
+    if len(lines) > 1:
+        yield from (line for line in lines if line)
+
+
 def _strings(value: object, seen: dict[int, object]) -> Iterator[str]:
-    """Every string inside the value: strings, bytes in their text, hex and repr forms, the items of containers and
-    other iterables (the keys of a mapping are names, like the variable names), the fields of a dataclass or of any
-    object, the wrapped value of a SecretStr-like object, numbers and paths as text. None and bool are not secrets.
+    """Every string inside the value: strings and the values a string holds (a JSON document, a list of URLs), bytes
+    in their text, hex and repr forms, the items of containers and other iterables (the keys of a nested mapping are
+    data, like its values; the keys of the top-level mapping are the variable names and never reach here), the fields
+    of a dataclass, the wrapped value of a SecretStr-like object, numbers and paths as text. None and bool are not
+    secrets. Any other type is refused: the masker cannot promise that it found every secret inside it.
 
     `seen` keeps a reference to every container visited, so that a cycle stops and a freed temporary cannot hand its
     id to a later container that would then be skipped.
@@ -154,6 +180,7 @@ def _strings(value: object, seen: dict[int, object]) -> Iterator[str]:
         return
     if isinstance(value, str):
         yield value
+        yield from _strings_inside(value, seen)
     elif isinstance(value, bytes | bytearray | memoryview):
         raw = bytes(value)
         yield raw.decode('utf-8', errors='surrogateescape')
@@ -166,7 +193,8 @@ def _strings(value: object, seen: dict[int, object]) -> Iterator[str]:
         return
     elif isinstance(value, Mapping):
         seen[id(value)] = value
-        for item in value.values():
+        for key, item in value.items():
+            yield from _strings(key, seen)
             yield from _strings(item, seen)
     elif isinstance(value, Iterable):
         seen[id(value)] = value
@@ -180,12 +208,14 @@ def _strings(value: object, seen: dict[int, object]) -> Iterator[str]:
         seen[id(value)] = value
         for field in dataclasses.fields(value):
             yield from _strings(getattr(value, field.name), seen)
-    elif hasattr(value, '__dict__'):
-        seen[id(value)] = value
-        for item in vars(value).values():
-            yield from _strings(item, seen)
     else:
-        raise TypeError(f'A private value of type {type(value).__name__} cannot be searched for secrets')
+        raise TypeError(f'A private value of type {type(value).__name__} is not supported, pass {SUPPORTED_TYPES}')
+
+
+def check_private_value(value: object) -> None:
+    """Raise `TypeError` for a value the masker cannot search for secrets, by the rule of `SecretsMasker`."""
+    for _ in _strings(value, {}):
+        pass
 
 
 def _secret_values(secrets: Mapping[str, object]) -> frozenset[str]:
@@ -219,7 +249,8 @@ class SecretsMasker:
     """Replaces every form of the secret values with the masked value in any text, for example in a formatted log line.
 
     The case of the text does not matter: a key is logged upper-case as often as lower-case. New secrets can be added
-    later with `add()`, for a service that configures logging before it reads its config.
+    later with `add()`, for a service that configures logging before it reads its config. A value of a type the masker
+    cannot search (`SUPPORTED_TYPES` lists the supported ones) raises `TypeError`, in the constructor and in `add()`.
     """
 
     def __init__(self, secrets: Mapping[str, object]):

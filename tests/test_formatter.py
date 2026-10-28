@@ -1,11 +1,12 @@
 import dataclasses
 import json
 import logging
+import sys
 from decimal import Decimal
 
 import pytest
 
-from logmask.formatter import JsonFormatter, json_default
+from logmask.formatter import UNPRINTABLE, JsonFormatter, json_default
 from logmask.secrets import MASKED_VALUE, SecretsMasker
 from tests.conftest import KEY, RPC, SECRETS, assert_no_secret, make_record
 
@@ -257,6 +258,24 @@ def test_leaf_masking_keeps_the_other_values_of_the_line():
     assert parsed['msg'] == f'a {MASKED_VALUE} b'
     assert parsed['items'] == ['x', 1, None, {'k': f'y{MASKED_VALUE}z'}]
     assert parsed['n'] == 2
+
+
+def test_a_message_nested_too_deep_for_the_leaf_masking_becomes_a_fallback_line():
+    formatter = JsonFormatter(SecretsMasker({'PIN': 12345678}))
+    message: dict[str, object] = {'msg': 'login', 'pin': 12345678}
+    cursor = message
+    for _ in range(sys.getrecursionlimit() * 2):
+        cursor['next'] = {}
+        cursor = cursor['next']  # type: ignore[assignment]
+    cursor['pin'] = 'pin 12345678'
+
+    line = formatter.format(make_record(message))
+
+    parsed = json.loads(line)
+    assert '12345678' not in line
+    assert 'RecursionError' in parsed['error']
+    # str() of the message raises on some Python versions and succeeds on others; both ways no secret is left.
+    assert parsed['msg'] == UNPRINTABLE or parsed['msg'].startswith(f"{{'msg': 'login', 'pin': {MASKED_VALUE}")
 
 
 @pytest.mark.parametrize(('secret', 'logged'), [(12345678, 12345678), ('12345678', 12345678), (12345678, '12345678'), (3.14159, 3.14159)])

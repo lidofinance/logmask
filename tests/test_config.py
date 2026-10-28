@@ -28,6 +28,11 @@ def test_masked_config_keeps_public_values_and_marks_unset_private_ones_empty():
     assert list(config) == list(PUBLIC) + list(SECRETS)
 
 
+def test_masked_config_rejects_a_private_value_the_masker_cannot_search():
+    with pytest.raises(TypeError, match='object is not supported'):
+        masked_config({}, {'OPAQUE': object()})
+
+
 def test_masked_config_rejects_overlapping_keys():
     with pytest.raises(ValueError, match='WALLET_PRIVATE_KEY'):
         masked_config({'WALLET_PRIVATE_KEY': 'x'}, SECRETS)

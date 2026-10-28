@@ -42,7 +42,7 @@ def restore_logging() -> Iterator[None]:
     root = logging.getLogger()
     handlers, level = list(root.handlers), root.level
     hooks = sys.excepthook, threading.excepthook, sys.unraisablehook
-    masker = configure._masker
+    masker, last_resort = configure._masker, logging.lastResort
     try:
         yield
     finally:
@@ -51,3 +51,4 @@ def restore_logging() -> Iterator[None]:
         logging.captureWarnings(False)
         sys.excepthook, threading.excepthook, sys.unraisablehook = hooks
         configure._masker = masker
+        logging.lastResort = last_resort

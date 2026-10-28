@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-10-29
+
+### Fixed
+
+- A string holding several URLs (`url1,url2`, `url1 url2`, a JSON list) was parsed as one URL, so every URL but the last one was masked only as a whole, not by its parts: `connect url1` and the path of `url1` were written in clear. A JSON document in a string (a list, the JSON of a service account) is now searched as the container it encodes, several URLs in one string are searched one by one, and every line of a multi-line value (a PEM key) is a secret on its own.
+- A dict message nested deeper than the recursion limit, in a process with a secret that breaks the JSON syntax of the line (a number, a quote), raised `RecursionError` out of `logger.info()`. Such a record becomes a flat masked line with the error.
+- A logger that does not propagate and has no handler went to `logging.lastResort`, which wrote the raw message to stderr. `setup_logging` replaces it by a masked JSON handler on the same stream.
+
+### Changed
+
+- The keys of a nested mapping are secrets too, like its values: a private mapping may be keyed by the secret itself. The top-level keys stay the variable names.
+- A private value of a type the masker cannot search (a plain object, a function, a module, a class) raises `TypeError` in `SecretsMasker`, `add()`, `setup_logging` and `masked_config`, with the list of the supported types. Before, an object was searched through its `__dict__`, which does not see slots, properties or closures, and a function or a module was accepted with no secret found.
+- README: the list of outputs that do not pass through the handler (handlers added later, `dictConfig`, `multiprocessing` children, `print`, `sys.exit`), and the known gap for a password re-encoded by yarl.
+
 ## [0.1.2] - 2026-10-28
 
 ### Fixed

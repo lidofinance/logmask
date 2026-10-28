@@ -33,7 +33,8 @@ class JsonFormatter(logging.Formatter):
     """One JSON object per line with a fixed set of record fields; every line goes through the masker.
 
     `format()` never raises: a record that cannot be formatted becomes a line with an `error` field. Otherwise the
-    handler would report the error with the raw message and arguments, without masking.
+    handler would report the error with the raw message and arguments, without masking, or the error would reach the
+    caller of the logger.
     """
 
     def __init__(self, masker: SecretsMasker):
@@ -49,11 +50,16 @@ class JsonFormatter(logging.Formatter):
         masked = self._masker.mask(text)
         try:
             json.loads(masked)
+            return masked
         except ValueError:
-            # A secret made of JSON syntax (a quote, a brace, `true`) was replaced outside the strings. Mask the
-            # strings one by one instead; the JSON-escaped forms are then not needed, and the syntax stays.
-            masked = json.dumps(self._mask_leaves(json.loads(text)))
-        return masked
+            pass
+        # A secret made of JSON syntax (a quote, a brace, `true`, a number) was replaced outside the strings. Mask
+        # the strings one by one instead; the JSON-escaped forms are then not needed, and the syntax stays.
+        try:
+            return json.dumps(self._mask_leaves(json.loads(text)))
+        except Exception as error:  # noqa: BLE001 - a message nested too deep for the recursion limit, see the class docstring
+            # The fallback line is flat: its values are the record fields and short texts.
+            return json.dumps(self._mask_leaves(self._fallback_line(record, error)))
 
     def _mask_leaves(self, value: Any) -> Any:
         if isinstance(value, str):
