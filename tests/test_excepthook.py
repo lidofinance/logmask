@@ -10,8 +10,8 @@ import pytest
 
 from logmask.excepthook import install_excepthook
 from logmask.formatter import JsonFormatter
-from logmask.secrets import SecretsMasker
-from tests.conftest import RPC, SECRETS, assert_no_secret
+from logmask.secrets import MASKED_VALUE, SecretsMasker
+from tests.conftest import RPC, RPC_2, SECRETS, assert_no_secret
 
 MASKER = SecretsMasker(SECRETS)
 
@@ -175,3 +175,75 @@ def test_a_foreign_handler_on_the_root_logger_receives_the_traceback_masked(rest
 
     assert 'ConnectionError' in stream.getvalue()
     assert_no_secret(stream.getvalue())
+
+
+def test_thread_hook_without_an_exception_value_and_with_a_secret_in_the_thread_name(restore_logging, unhandled_log):
+    install_excepthook(masker=MASKER)
+    thread = threading.Thread(name=f'worker-{RPC}', target=lambda: None)
+
+    threading.excepthook(threading.ExceptHookArgs([ConnectionError, None, None, thread]))
+
+    line = json.loads(unhandled_log.getvalue())
+    assert line['error'].startswith('ConnectionError')
+    assert line['thread'].startswith('worker-')
+    assert_no_secret(json.dumps(line))
+
+
+def test_keyboard_interrupt_notes_and_exception_groups_are_masked(capsys, restore_logging, unhandled_log):
+    install_excepthook(masker=MASKER)
+    interrupt = KeyboardInterrupt()
+    interrupt.add_note(f'while connecting to {RPC}')
+    group = ExceptionGroup('providers failed', [ConnectionError(f'cannot reach {RPC}'), TimeoutError(RPC_2)])
+
+    sys.excepthook(type(interrupt), interrupt, None)
+    sys.excepthook(type(group), group, None)
+
+    report = capsys.readouterr().err
+    assert 'while connecting to' in report
+    assert_no_secret(report)
+    line = json.loads(unhandled_log.getvalue())
+    assert 'providers failed' in line['error']
+    assert_no_secret(line['error'])
+
+
+def test_an_exception_whose_str_raises_is_still_reported_masked(capsys, restore_logging, unhandled_log):
+    class Broken(Exception):
+        def __str__(self) -> str:
+            raise RuntimeError(f'str failed for {RPC}')
+
+    install_excepthook(masker=MASKER)
+
+    sys.excepthook(Broken, Broken(), None)
+
+    output = capsys.readouterr().err + unhandled_log.getvalue()
+    assert 'Broken' in output
+    assert_no_secret(output)
+
+
+def test_keyboard_interrupt_with_a_closed_stderr_does_not_raise(restore_logging, monkeypatch):
+    class Closed(io.StringIO):
+        def write(self, text: str) -> int:
+            raise ValueError('I/O operation on closed file')
+
+    monkeypatch.setattr('sys.stderr', Closed())
+    install_excepthook(masker=MASKER)
+    interrupt = raise_keyboard_interrupt_during_error_handling()
+
+    sys.excepthook(type(interrupt), interrupt, interrupt.__traceback__)
+
+
+def test_unraisable_hook_keeps_the_interpreter_message_when_it_is_given(restore_logging, unhandled_log):
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    install_excepthook(masker=MASKER)
+    error = raise_connection_error()
+    args = SimpleNamespace(
+        exc_type=type(error), exc_value=error, exc_traceback=error.__traceback__, err_msg=f'Exception ignored on {RPC}', object=None
+    )
+
+    sys.unraisablehook(cast(Any, args))
+
+    line = json.loads(unhandled_log.getvalue())
+    assert line['context'] == f'Exception ignored on {MASKED_VALUE}'
+    assert_no_secret(line['error'])

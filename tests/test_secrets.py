@@ -324,3 +324,89 @@ def test_masking_works_on_non_ascii_text_too():
     masker = SecretsMasker({'K': 'KEY-0123456789'})
 
     assert masker.mask('Ünïcode key-0123456789 İstanbul') == f'Ünïcode {MASKED_VALUE} İstanbul'
+
+
+@pytest.mark.parametrize(
+    ('fragment', 'masked_alone'),
+    [
+        ('abcdefghijklmnop', True),  # 16 characters, no digit
+        ('abcdefghijklmno', False),  # 15 characters, no digit
+        ('abcdefg1', True),  # 8 characters with a digit
+        ('abcdef1', False),  # 7 characters with a digit
+    ],
+)
+def test_fragment_rule_boundaries_for_host_segment_and_query_value(fragment, masked_alone):
+    # The host alone, one path segment and one query value are masked on their own only when key-like.
+    masker = SecretsMasker({'U': f'https://{fragment}/{fragment}?k={fragment}'})
+    expected = MASKED_VALUE if masked_alone else fragment
+
+    assert masker.mask(f'host {fragment} segment {fragment} value {fragment}') == f'host {expected} segment {expected} value {expected}'
+    assert masker.mask(f'path /{fragment} query k={fragment}') == f'path {MASKED_VALUE} query {MASKED_VALUE}'
+
+
+def test_ipv6_host_empty_password_and_query_with_equals():
+    masker = SecretsMasker({'A': 'https://user:@[::1]:8545/v3/key-0123456789', 'B': 'https://rpc.example/?token=a=b=c-0123456789'})
+
+    assert (
+        masker.mask('url https://user:@[::1]:8545/v3/key-0123456789 path /v3/key-0123456789') == f'url {MASKED_VALUE} path {MASKED_VALUE}'
+    )
+    assert masker.mask('q token=a=b=c-0123456789 v a=b=c-0123456789') == f'q {MASKED_VALUE} v {MASKED_VALUE}'
+
+
+def test_dataclass_with_bytes_paths_decimals_and_wrapped_lists_are_searched():
+    from decimal import Decimal
+    from pathlib import PurePosixPath
+
+    @dataclasses.dataclass
+    class Keys:
+        raw: bytes
+        name: str
+
+    class Wrapped:
+        def __init__(self, value: str) -> None:
+            self._value = value
+
+        def get_secret_value(self) -> str:
+            return self._value
+
+    masker = SecretsMasker(
+        {
+            'K': Keys(b'raw-secret-bytes', 'named-secret-1'),
+            'W': [Wrapped('wrapped-one-1'), Wrapped('wrapped-two-2')],
+            'P': PurePosixPath('/run/secrets/token-file-9'),
+            'D': Decimal('123456.789'),
+        }
+    )
+
+    masked = masker.mask(
+        'raw-secret-bytes 7261772d7365637265742d6279746573 named-secret-1 wrapped-one-1 wrapped-two-2 /run/secrets/token-file-9 123456.789'
+    )
+
+    assert masked == ' '.join([MASKED_VALUE] * 7)
+
+
+def test_add_while_other_threads_mask():
+    import threading
+
+    masker = SecretsMasker({'A': 'first-secret-1'})
+    errors: list[BaseException] = []
+    stop = threading.Event()
+
+    def worker() -> None:
+        try:
+            while not stop.is_set():
+                assert 'first-secret-1' not in masker.mask('x first-secret-1 y late-secret-2')
+        except BaseException as error:  # noqa: BLE001 - collected for the assertion below
+            errors.append(error)
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for index in range(50):
+        masker.add({f'L{index}': f'late-secret-{index}'})
+    stop.set()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    assert masker.mask('x first-secret-1 y late-secret-2') == f'x {MASKED_VALUE} y {MASKED_VALUE}'

@@ -205,3 +205,45 @@ def test_masked_line_stays_valid_json_for_a_secret_made_of_json_syntax(secret):
     parsed = json.loads(line)
     assert secret not in parsed['msg']
     assert MASKED_VALUE in parsed['msg']
+
+
+def test_a_secret_used_as_a_message_key_is_masked_and_the_line_stays_json():
+    formatter = JsonFormatter(SecretsMasker({'S': 'key"secret-12345'}))
+
+    line = formatter.format(make_record({'msg': 'weights', 'key"secret-12345': 1, 'nested': {'key"secret-12345': [2]}}))
+
+    parsed = json.loads(line)
+    assert 'secret-12345' not in line
+    assert parsed[MASKED_VALUE] == 1
+    assert parsed['nested'] == {MASKED_VALUE: [2]}
+
+
+def test_json_formatter_serializes_a_mapping_that_is_not_a_dict():
+    from types import MappingProxyType
+
+    block = MappingProxyType({'number': 1, 'hash': b'\x0a'})
+
+    line = json.loads(PLAIN.format(make_record({'msg': 'block', 'value': block})))
+
+    assert line['value'] == {'number': 1, 'hash': '0x0a'}
+
+
+def test_a_message_that_cannot_be_encoded_by_the_stream_does_not_leak_through_the_error_report(capsys):
+    import io
+
+    from logmask.handler import SafeStreamHandler
+
+    class AsciiStream(io.StringIO):
+        def write(self, text: str) -> int:
+            # The error of a narrow stream carries the whole text being written.
+            raise UnicodeEncodeError('ascii', text, 0, 1, 'ordinal not in range(128)')
+
+    masker = SecretsMasker(SECRETS)
+    handler = SafeStreamHandler(AsciiStream(), masker=masker)
+    handler.setFormatter(JsonFormatter(masker))
+
+    handler.handle(make_record({'msg': 'café', 'url': RPC}))
+
+    report = capsys.readouterr().err
+    assert 'UnicodeEncodeError' in report
+    assert_no_secret(report)

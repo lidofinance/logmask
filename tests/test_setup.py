@@ -114,3 +114,32 @@ def test_the_masker_and_the_secrets_are_required():
         'setup_logging',
     }
     assert not hasattr(SecretsMasker({'K': KEY}), 'values')
+
+
+def test_setup_logging_takes_a_numeric_level_and_writes_to_stderr_by_default(restore_logging, capsys):
+    setup_logging(SECRETS, level=logging.WARNING)
+    logging.getLogger('bot').info('hidden')
+    logging.getLogger('bot').warning('shown %s', RPC)
+
+    err = capsys.readouterr().err
+    assert logging.getLogger().level == logging.WARNING
+    assert 'hidden' not in err
+    assert json.loads(err)['msg'] == f'shown {MASKED_VALUE}'
+
+
+def test_a_warning_with_the_secret_in_its_filename_and_category_is_masked(restore_logging, capsys):
+    stream = io.StringIO()
+    setup_logging(SECRETS, stream=stream)
+
+    class LeakyWarning(UserWarning):
+        pass
+
+    LeakyWarning.__name__ = f'Warning{KEY}'
+    with warnings.catch_warnings():
+        warnings.simplefilter('always')
+        warnings.warn_explicit('insecure request', LeakyWarning, filename=f'/app/{KEY}.py', lineno=1)
+
+    line = json.loads(stream.getvalue())
+    assert 'insecure request' in line['msg']
+    assert_no_secret(stream.getvalue())
+    assert capsys.readouterr().err == ''

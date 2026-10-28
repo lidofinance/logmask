@@ -47,3 +47,32 @@ def test_processor_masks_bytes_from_a_bytes_renderer():
         processor(None, 'info', f'key {KEY} \xff'.encode('utf-8', errors='surrogateescape') + b'\xff')
         == f'key {MASKED_VALUE} \xff'.encode() + b'\xff'
     )
+
+
+def test_a_real_structlog_chain_masks_a_traceback_with_a_url():
+    stream = io.StringIO()
+    log = make_logger(
+        stream,
+        [
+            structlog.processors.add_log_level,
+            structlog.processors.format_exc_info,
+            structlog.processors.JSONRenderer(),
+            mask_secrets_processor(SecretsMasker(SECRETS)),
+        ],
+    )
+
+    try:
+        raise ConnectionError(f'Max retries exceeded with url: {RPC}')
+    except ConnectionError:
+        log.exception('request failed')
+
+    line = json.loads(stream.getvalue())
+    assert 'Traceback' in line['exception']
+    assert 'ConnectionError' in line['exception']
+    assert_no_secret(stream.getvalue())
+
+
+def test_processor_masks_a_bytes_event_in_upper_case():
+    processor = mask_secrets_processor(SecretsMasker(SECRETS))
+
+    assert processor(None, 'info', f'KEY {KEY.upper()}'.encode()) == f'KEY {MASKED_VALUE}'.encode()
