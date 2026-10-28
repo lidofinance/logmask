@@ -206,7 +206,13 @@ def _compile(forms: Iterable[str], flags: int) -> re.Pattern[str]:
     # match: overlapping secrets are merged into one span, a plain substitution would leave the tail of the second
     # one visible.
     ordered = sorted(set(forms), key=lambda form: (-len(form), form))
-    return re.compile('(?=(' + '|'.join(map(re.escape, ordered)) + '))', flags)
+    pattern = re.compile('(?=(' + '|'.join(map(re.escape, ordered)) + '))', flags)
+    # re keeps the last few hundred compiled patterns in a process-wide cache, keyed by their source. Every add()
+    # compiles a bigger pattern, and the earlier ones, with the text of the secrets, would stay in that cache for
+    # the life of the process: hundreds of MiB after a few hundred token rotations, and secrets that outlive the
+    # masker. The cache is dropped; other modules only recompile their patterns once.
+    re.purge()
+    return pattern
 
 
 class SecretsMasker:

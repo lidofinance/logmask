@@ -468,3 +468,26 @@ def test_masking_after_a_character_whose_lower_case_changes_the_length():
     masker = SecretsMasker({'K': 'KEY-0123456789'})
 
     assert masker.mask('İstanbul key-0123456789 İzmir KEY-0123456789') == f'İstanbul {MASKED_VALUE} İzmir {MASKED_VALUE}'
+
+
+def test_repeated_add_does_not_keep_the_old_patterns_alive():
+    import gc
+    import re
+    import tracemalloc
+
+    re.purge()
+    gc.collect()
+    tracemalloc.start()
+    try:
+        base = tracemalloc.get_traced_memory()[0]
+        masker = SecretsMasker({'A': 'https://rpc.example/v3/token-start-00000'})
+        for index in range(60):
+            masker.add({f'T{index}': f'https://rpc.example/v3/token-rotated-{index:05d}'})
+        gc.collect()
+        retained = tracemalloc.get_traced_memory()[0] - base
+    finally:
+        tracemalloc.stop()
+
+    # Without the fix the re cache holds every earlier pattern: tens of MiB after 60 rotations.
+    assert retained < 8 * 2**20, f'{retained / 2**20:.1f} MiB retained'
+    assert masker.mask('token-rotated-00059 token-start-00000') == f'{MASKED_VALUE} {MASKED_VALUE}'

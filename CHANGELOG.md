@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-10-28
+
+### Fixed
+
+- Every `add()` left the previous compiled pattern, with the text of the secrets, in the cache of the `re` module for the life of the process: about 1 MiB per call, so a service that rotates a token many times kept hundreds of MiB, and the secrets outlived the masker. The cache is now dropped after each compilation.
+
 ## [0.1.1] - 2026-10-28
 
 ### Fixed
