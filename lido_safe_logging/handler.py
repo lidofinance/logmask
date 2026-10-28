@@ -3,7 +3,7 @@ import logging
 import sys
 from typing import IO
 
-from .secrets import SecretsMasker
+from .secrets import LIBRARY_TAG, SecretsMasker
 
 
 class SafeStreamHandler(logging.StreamHandler):  # type: ignore[type-arg]
@@ -22,7 +22,7 @@ class SafeStreamHandler(logging.StreamHandler):  # type: ignore[type-arg]
         if not logging.raiseExceptions:
             return
         error = sys.exc_info()[1]
-        text = f'--- Logging error: {error!r} (record from {record.name}, {record.pathname}:{record.lineno}) ---\n'
+        text = f'--- {LIBRARY_TAG} Logging error: {error!r} (record from {record.name}, {record.pathname}:{record.lineno}) ---\n'
         # stderr may be the stream that failed; there is nowhere else to report.
         with contextlib.suppress(Exception):
             sys.stderr.write(self._masker.mask(text))

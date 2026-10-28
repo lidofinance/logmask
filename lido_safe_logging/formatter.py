@@ -4,7 +4,7 @@ import logging
 from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
-from .secrets import SecretsMasker
+from .secrets import LIBRARY_TAG, SecretsMasker
 
 UNPRINTABLE = '<unprintable>'
 
@@ -86,7 +86,11 @@ class JsonFormatter(logging.Formatter):
         return line
 
     def _fallback_line(self, record: logging.LogRecord, error: Exception) -> dict[str, Any]:
-        line = {**self._base(record), 'msg': _safe(str, record.msg), 'error': f'Log record could not be formatted: {_safe(repr, error)}'}
+        line = {
+            **self._base(record),
+            'msg': _safe(str, record.msg),
+            'error': f'{LIBRARY_TAG} Log record could not be formatted: {_safe(repr, error)}',
+        }
         if record.args:
             line['args'] = _safe(repr, record.args)
         return line

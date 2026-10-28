@@ -7,7 +7,7 @@ from types import TracebackType
 
 from .formatter import JsonFormatter
 from .handler import SafeStreamHandler
-from .secrets import SecretsMasker
+from .secrets import LIBRARY_TAG, SecretsMasker
 
 LOGGER_NAME = 'unhandled'
 
@@ -60,7 +60,7 @@ def _log_exception(
         handler.handle(record)
     except BaseException as failure:  # noqa: BLE001 - the hook must not raise, see the docstring
         with contextlib.suppress(Exception):
-            sys.stderr.write(masker.mask(f'--- {exc_type.__name__} could not be logged: {type(failure).__name__} ---\n'))
+            sys.stderr.write(masker.mask(f'--- {LIBRARY_TAG} {exc_type.__name__} could not be logged: {type(failure).__name__} ---\n'))
 
 
 def install_excepthook(*, masker: SecretsMasker) -> None:

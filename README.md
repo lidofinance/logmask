@@ -263,11 +263,11 @@ A short word of a URL on its own (see above). Text that does not pass through th
 
 ## When logging itself fails
 
-A record that cannot be formatted (wrong `%` arguments, a value `json` cannot serialize) is still written as one masked JSON line, with the problem in the `error` field:
+A record that cannot be formatted (wrong `%` arguments, a value `json` cannot serialize) is still written as one masked JSON line, with the problem in the `error` field. Every line the library writes on its own behalf, instead of the record, starts with `[lido-safe-logging]`:
 
 ```py
 logger.info('rpc %d %s', 'https://rpc.example.com/v3/a1b2c3d4e5f6', 'x')
-# {..., "msg": "rpc %d %s", "error": "Log record could not be formatted: TypeError('%d format: a real number is required, not str')", "args": "('***', 'x')"}
+# {..., "msg": "rpc %d %s", "error": "[lido-safe-logging] Log record could not be formatted: TypeError('%d format: a real number is required, not str')", "args": "('***', 'x')"}
 ```
 
 The standard library would print this instead, to stderr and without masking:
@@ -284,7 +284,7 @@ Arguments: ('https://rpc.example.com/v3/a1b2c3d4e5f6', 'x')
 A record that cannot be written (the stream is closed, the pipe is broken) is reported by `SafeStreamHandler` without the record, where the standard handler would print the same `Message:` and `Arguments:` lines as above:
 
 ```text
---- Logging error: BrokenPipeError(32, 'Broken pipe') (record from app, /app/main.py:31) ---
+--- [lido-safe-logging] Logging error: BrokenPipeError(32, 'Broken pipe') (record from app, /app/main.py:31) ---
 ```
 
 An unhandled exception goes through the logger as a CRITICAL line:

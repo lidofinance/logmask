@@ -119,7 +119,7 @@ def test_json_formatter_masks_a_record_that_cannot_be_formatted():
     line = json.loads(JsonFormatter(SecretsMasker(SECRETS)).format(record))
 
     assert line['msg'] == 'rate %d of %s'
-    assert line['error'].startswith('Log record could not be formatted: TypeError')
+    assert line['error'].startswith('[lido-safe-logging] Log record could not be formatted: TypeError')
     assert 'oops' in line['args']
     assert_no_secret(line['args'])
     assert list(line)[:7] == ['name', 'levelname', 'funcName', 'lineno', 'module', 'pathname', 'timestamp']

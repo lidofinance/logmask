@@ -28,7 +28,7 @@ def test_write_failure_does_not_print_the_record(capsys):
     make_handler().handle(record)
 
     report = capsys.readouterr().err
-    assert 'Logging error' in report
+    assert '[lido-safe-logging] Logging error' in report
     assert 'Broken pipe' in report
     assert 'conftest.py:1' in report
     assert 'key %s' not in report

@@ -1,10 +1,10 @@
+import gc
 import io
 import json
 import logging
 import sys
 import threading
 from collections.abc import Iterator
-from types import SimpleNamespace
 
 import pytest
 
@@ -36,6 +36,17 @@ def raise_connection_error() -> ConnectionError:
         raise ConnectionError(f'Max retries exceeded with url: {RPC}')
     except ConnectionError as error:
         return error
+
+
+class RaisesOnDelete:
+    def __del__(self) -> None:
+        raise ConnectionError(f'Max retries exceeded with url: {RPC}')
+
+
+def raise_unraisable_connection_error() -> None:
+    # An exception in __del__ cannot be raised to anyone: the interpreter hands it to sys.unraisablehook.
+    RaisesOnDelete()
+    gc.collect()
 
 
 def raise_keyboard_interrupt_during_error_handling() -> KeyboardInterrupt:
@@ -113,9 +124,7 @@ def test_install_excepthook_sets_the_three_hooks(restore_logging, unhandled_log)
     error = raise_connection_error()
     sys.excepthook(type(error), error, error.__traceback__)
     threading.excepthook(threading.ExceptHookArgs([type(error), error, error.__traceback__, threading.current_thread()]))
-    sys.unraisablehook(
-        SimpleNamespace(exc_type=type(error), exc_value=error, exc_traceback=error.__traceback__, err_msg=None, object=object())
-    )  # type: ignore[arg-type]
+    raise_unraisable_connection_error()
 
     lines = [json.loads(line) for line in unhandled_log.getvalue().splitlines()]
     assert [line['msg'] for line in lines] == [
@@ -125,6 +134,7 @@ def test_install_excepthook_sets_the_three_hooks(restore_logging, unhandled_log)
     ]
     assert all(line['levelname'] == 'CRITICAL' for line in lines)
     assert lines[1]['thread'] == threading.current_thread().name
+    assert 'Exception ignored' in lines[2]['context']
     for line in lines:
         assert_no_secret(line['error'])
 
@@ -150,7 +160,7 @@ def test_a_failure_inside_the_hook_prints_one_masked_line_and_does_not_raise(cap
     sys.excepthook(type(error), error, error.__traceback__)
 
     report = capsys.readouterr().err
-    assert 'ConnectionError could not be logged' in report
+    assert '[lido-safe-logging] ConnectionError could not be logged' in report
     assert 'Traceback' not in report
     assert_no_secret(report)
 
