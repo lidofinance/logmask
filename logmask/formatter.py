@@ -62,6 +62,11 @@ class JsonFormatter(logging.Formatter):
             return {self._masker.mask(key): self._mask_leaves(item) for key, item in value.items()}
         if isinstance(value, list):
             return [self._mask_leaves(item) for item in value]
+        if isinstance(value, int | float) and not isinstance(value, bool):
+            # A number equal to a secret (a PIN, an id) is what broke the line: it is replaced by the masked text.
+            text = str(value)
+            masked = self._masker.mask(text)
+            return value if masked == text else masked
         return value
 
     def _base(self, record: logging.LogRecord) -> dict[str, Any]:

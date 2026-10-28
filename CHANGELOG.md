@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-10-28
+
+### Fixed
+
+- A number equal to a secret in a dict message (a PIN logged as an int) was written in clear: the line-level mask broke the JSON syntax and the fallback masked only the strings. The fallback now masks numbers by their text too.
+
+### Added
+
+- Property tests on random secrets, tests of the rule boundaries, of the hooks and of a real structlog chain; mutation tests in CI (mutmut, at most 50 known equivalent survivors).
+
 ## [0.1.0] - 2026-10-28
 
 ### Added

@@ -7,7 +7,7 @@ No runtime dependencies. Python 3.12 or newer.
 ## Install
 
 ```bash
-poetry add git+https://github.com/lidofinance/logmask.git@v0.1.0
+poetry add git+https://github.com/lidofinance/logmask.git@v0.1.1
 ```
 
 Pin a tag, or a commit with `rev`, and commit `poetry.lock`: it records the exact commit. Poetry clones the repository itself; a build stage that installs with `pip` needs `git`.

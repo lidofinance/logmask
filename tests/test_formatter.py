@@ -257,3 +257,16 @@ def test_leaf_masking_keeps_the_other_values_of_the_line():
     assert parsed['msg'] == f'a {MASKED_VALUE} b'
     assert parsed['items'] == ['x', 1, None, {'k': f'y{MASKED_VALUE}z'}]
     assert parsed['n'] == 2
+
+
+@pytest.mark.parametrize(('secret', 'logged'), [(12345678, 12345678), ('12345678', 12345678), (12345678, '12345678'), (3.14159, 3.14159)])
+def test_a_number_equal_to_a_secret_is_masked_in_a_dict_message(secret, logged):
+    formatter = JsonFormatter(SecretsMasker({'PIN': secret}))
+
+    line = formatter.format(make_record({'msg': 'login', 'pin': logged, 'items': [logged, {'deep': logged}], 'count': 7}))
+
+    parsed = json.loads(line)
+    assert str(secret) not in line
+    assert parsed['pin'] == MASKED_VALUE
+    assert parsed['items'] == [MASKED_VALUE, {'deep': MASKED_VALUE}]
+    assert parsed['count'] == 7
