@@ -1,32 +1,18 @@
 # lido-safe-logging
 
-JSON logging with masked secrets for Python services. One JSON object per line goes to the stream, and every line - including the messages of third-party libraries and the traceback of an unhandled exception - passes through a masker that replaces the configured secret values with `***`.
+JSON logging for Python services, with secrets masked. Every log line is one JSON object. Every line goes through a masker that replaces your secret values with `***`. This includes the messages of third-party libraries and the traceback of an unhandled exception.
 
-The library gives you:
-
-- `SecretsMasker` - replaces known secret values in any text, in their raw, stripped, hex, URL, repr and JSON-escaped forms; takes more secrets later with `add()`
-- `JsonFormatter` - a `logging.Formatter` that writes one JSON object per record and masks the result; it never raises
-- `SafeStreamHandler` - a `logging.StreamHandler` whose error report (a broken pipe, a closed stream) does not print the record
-- `install_excepthook` - sends unhandled exceptions of the main thread and of other threads through the logger
-- `masked_config` - builds a config dict for the startup log without reading the private values
-- `setup_logging` - one call that wires all of the above into the root logger
-- `mask_secrets_processor` - the same masking as a structlog processor (structlog is not a dependency of this package, your service brings its own)
-
-No runtime dependencies, by design: the package installs nothing besides itself, and a test plus a CI check keep it that way. Python 3.12 or newer.
+No runtime dependencies. Python 3.12 or newer.
 
 ## Install
-
-Pin a tag:
 
 ```bash
 poetry add git+https://github.com/lidofinance/lido-safe-logging.git@v0.1.0
 ```
 
-A Docker build stage that installs the package from git needs `git`.
+Pin a tag. A Docker build stage that installs the package from git needs `git`.
 
-## Usage
-
-### Standard `logging`
+## Quick start
 
 ```py
 import logging
@@ -34,53 +20,113 @@ import logging
 from lido_safe_logging import masked_config, setup_logging
 
 PUBLIC = {'RPC_TIMEOUT': 30, 'DRY_RUN': True}
-PRIVATE = {'RPC_URL': 'https://user:password@rpc.example.com/v1', 'API_TOKEN': 'abcdef0123456789'}
+PRIVATE = {'RPC_URL': 'https://rpc.example.com/v3/a1b2c3d4e5f6', 'API_TOKEN': 'tok_9f8e7d6c5b4a'}
 
 setup_logging(PRIVATE)
 
 logger = logging.getLogger(__name__)
 logger.info({'msg': 'Config', 'value': masked_config(PUBLIC, PRIVATE)})
+logger.info('Connecting to %s', PRIVATE['RPC_URL'])
 ```
 
-`setup_logging` configures the root logger (JSON lines to stderr, level INFO), replaces the handlers that were there, and installs `sys.excepthook` and `threading.excepthook`, so that an unhandled exception is logged as one CRITICAL line with the masked traceback. It returns the `SecretsMasker` it built.
+Output (one line per record, stderr):
 
-A service that reads its config after it has configured logging (a module that logs at import time, a secret fetched from a vault) adds the values when it has them. Every line from that moment on is masked with them too:
+```json
+{"name": "app", "levelname": "INFO", "funcName": "main", "lineno": 12, "module": "main", "pathname": "/app/main.py", "timestamp": 1761600000, "msg": "Config", "value": {"RPC_TIMEOUT": 30, "DRY_RUN": true, "RPC_URL": "***", "API_TOKEN": "***"}}
+{"name": "app", "levelname": "INFO", "funcName": "main", "lineno": 13, "module": "main", "pathname": "/app/main.py", "timestamp": 1761600000, "msg": "Connecting to ***"}
+```
+
+`setup_logging(PRIVATE)` does three things:
+
+- configures the root logger: JSON lines to stderr, level INFO, old handlers removed
+- masks every line with the values of `PRIVATE`
+- installs `sys.excepthook` and `threading.excepthook`, so an unhandled exception becomes one CRITICAL line with a masked traceback
+
+`masked_config(PUBLIC, PRIVATE)` builds a dict for the startup log. Public values stay as they are. Private values become `***`. A private list keeps its length, a private dict keeps its keys. An unset private value (`None` or `''`) becomes `''`, so you can see which variables are set. A key present in both dicts raises `ValueError`.
+
+```py
+masked_config({'PORT': 9000}, {'TOKEN': 'abc', 'RPC_URLS': ['a', 'b'], 'OPTIONAL_KEY': None})
+# {'PORT': 9000, 'TOKEN': '***', 'RPC_URLS': ['***', '***'], 'OPTIONAL_KEY': ''}
+```
+
+## How to
+
+### Log a message
+
+A string message goes to the `msg` field. A dict message is merged into the line, so its keys become fields:
+
+```py
+logger.info('Report sent for slot %d', 1234567)
+# {..., "msg": "Report sent for slot 1234567"}
+
+logger.info({'msg': 'Report sent', 'slot': 1234567, 'root': b'\x0a\x0b'})
+# {..., "msg": "Report sent", "slot": 1234567, "root": "0x0a0b"}
+```
+
+### Log an exception
+
+```py
+try:
+    client.get(url)
+except ConnectionError:
+    logger.exception('Request failed')
+# {..., "levelname": "ERROR", "msg": "Request failed", "exc_info": "Traceback (most recent call last):\n  ...\nConnectionError: Max retries exceeded with url: ***"}
+```
+
+### Set the level and the stream
+
+```py
+setup_logging(PRIVATE, level=os.getenv('LOG_LEVEL', 'INFO'), stream=sys.stdout)
+```
+
+`level` takes a name or an int. `stream` is stderr by default.
+
+### Add secrets later
+
+`setup_logging` returns the masker. Call `add()` when a secret becomes known after logging is configured, for example a token fetched from a vault or a config module that logs at import time:
 
 ```py
 masker = setup_logging()
-...
-masker.add({'VAULT_TOKEN': token})
+
+from app import config  # logs at import time, before the config is known
+
+masker.add(config.PRIVATE)
 ```
 
-Options:
+Every line from that point on is masked with the new values too.
+
+### Also mask by the variable name
+
+`env_heuristic=True` adds the values of every environment variable with `SECRET`, `TOKEN`, `PASSWORD`, `PASS`, `PRIVATE`, `CREDENTIALS` or `KEY` as a word in its name:
 
 ```py
-setup_logging(
-    PRIVATE,
-    level='DEBUG',  # int or name, default INFO
-    stream=sys.stdout,  # default stderr
-    env_heuristic=True,  # also mask the values of env variables with SECRET, TOKEN, PASSWORD, PASS, PRIVATE, CREDENTIALS or KEY as a word in the name
-    excepthook=False,  # keep the default exception hooks
-)
+setup_logging(PRIVATE, env_heuristic=True)
 ```
 
-`masked_config(public, private)` builds the dict for the startup log: public values as they are, private values replaced by `***`, a private list keeps its length, a private dict keeps its keys, an unset private value (`None` or empty) becomes `''`. `0` and `False` are set values and show `***`. A key listed in both mappings raises `ValueError`.
-
-### The pieces, when you need them one by one
+A word means a part of the name between underscores. `WALLET_PRIVATE_KEY` and `DB_PASS` match. `KEYS_API_URL` and `COMPASS_URL` do not:
 
 ```py
-from lido_safe_logging import JsonFormatter, SafeStreamHandler, SecretsMasker, install_excepthook
-
-masker = SecretsMasker(PRIVATE)
-handler = SafeStreamHandler(masker=masker)
-handler.setFormatter(JsonFormatter(masker))
-logging.basicConfig(level=logging.INFO, handlers=[handler])
-install_excepthook(masker=masker)
+secrets_from_env({'API_TOKEN': 'abc', 'KEYS_API_URL': 'http://x', 'DB_PASS': 'p', 'COMPASS_URL': 'http://c'})
+# {'API_TOKEN': 'abc', 'DB_PASS': 'p'}
 ```
 
-`masker.mask(text)` masks any text by hand. `JsonFormatter()` without a masker only formats. `install_excepthook` uses its masker for the output that cannot go through the logger: a KeyboardInterrupt traceback, or any exception when no handler is configured.
+The heuristic adds to `PRIVATE`, it does not replace it. A secret under a name without a marker stays unmasked unless it is in `PRIVATE`.
 
-### structlog
+### Keep the default exception hooks
+
+```py
+setup_logging(PRIVATE, excepthook=False)
+```
+
+### Mask text by hand
+
+```py
+masker = setup_logging(PRIVATE)
+masker.mask('connect https://rpc.example.com/v3/a1b2c3d4e5f6')
+# 'connect ***'
+```
+
+### Use structlog
 
 ```py
 import structlog
@@ -98,11 +144,30 @@ structlog.configure(
 )
 ```
 
-After the renderer the processor masks the rendered line, keys and JSON-escaped forms included. Before the renderer it masks the string values of the event dict, nested lists, tuples, sets and dicts too. The module does not import structlog: the processor is a plain function with the `(logger, method_name, event_dict)` contract.
+Put the processor last, after the renderer. It then masks the whole rendered line. Before the renderer it masks the values of the event dict, including nested lists, tuples, sets and dicts. The package does not depend on structlog: your service installs its own version.
+
+### Use the pieces one by one
+
+```py
+import logging
+
+from lido_safe_logging import JsonFormatter, SafeStreamHandler, SecretsMasker, install_excepthook
+
+masker = SecretsMasker(PRIVATE)
+handler = SafeStreamHandler(masker=masker)
+handler.setFormatter(JsonFormatter(masker))
+logging.basicConfig(level=logging.INFO, handlers=[handler])
+install_excepthook(masker=masker)
+```
+
+- `SecretsMasker(secrets, min_length=8, masked_value='***')` - the masker; `mask(text)` and `add(secrets)`
+- `JsonFormatter(masker)` - one JSON object per record, masked; without a masker it only formats
+- `SafeStreamHandler(stream, masker=masker)` - a `StreamHandler` that does not print the record when the write fails
+- `install_excepthook(masker=masker)` - the exception hooks; the masker covers the output that cannot go through the logger, see below
 
 ## What is masked
 
-The examples below use this masker:
+The examples use this masker:
 
 ```py
 masker = SecretsMasker(
@@ -118,7 +183,7 @@ masker = SecretsMasker(
 )
 ```
 
-The value itself, and every item of a list, tuple, set or nested dict:
+Each value, and each item of a list, tuple, set or nested dict:
 
 ```py
 masker.mask('connect https://rpc.example.com/v3/a1b2c3d4e5f6/')
@@ -129,7 +194,7 @@ masker.mask('got nested-secret-value')
 # 'got ***'
 ```
 
-The value without surrounding whitespace and without a trailing `/`, so a secret read from a file with a trailing newline, or a URL configured with a slash at the end, is still caught when the log shows it the other way:
+The value without spaces and newlines around it, and without a trailing `/`:
 
 ```py
 masker.mask('token tok_9f8e7d6c5b4a expired')
@@ -138,7 +203,7 @@ masker.mask('connect https://rpc.example.com/v3/a1b2c3d4e5f6')
 # 'connect ***'
 ```
 
-The path and the query of a URL on their own, and every segment or query value that looks like a key: 8 characters or more and not a plain word (it has a digit, or it is 16 characters or longer). HTTP libraries often log only the path, and that is where a provider key lives. The host stays readable:
+The path and the query of a URL on their own, when they contain something that looks like a key (8 characters or more, with a digit, or 16 characters or more). HTTP libraries often log only the path:
 
 ```py
 masker.mask("HTTPSConnectionPool(host='rpc.example.com', port=443): Max retries exceeded with url: /v3/a1b2c3d4e5f6")
@@ -147,7 +212,7 @@ masker.mask('project a1b2c3d4e5f6 rate limited')
 # 'project *** rate limited'
 ```
 
-For a URL with basic auth: the whole URL, the password, `user:password`, and the username when it is 8 characters or longer. A route-like path (`/eth/v1`, no key-like segment) is not a secret, so a request path after the configured URL stays readable:
+The password and `user:password` of a URL with basic auth. The username too, when it is 8 characters or longer:
 
 ```py
 masker.mask('GET https://user:s3cretPassw0rd@beacon.example.com/eth/v1/beacon/genesis')
@@ -156,7 +221,7 @@ masker.mask('auth user:s3cretPassw0rd rejected')
 # 'auth *** rejected'
 ```
 
-A hex value with or without the `0x` prefix, in lower or upper case, and bytes as text and as hex. Bytes logged through `JsonFormatter` come out as lower-case `0x`-hex, a configured key may be upper-case:
+Hex values in both cases, with and without `0x`. Bytes as text and as hex:
 
 ```py
 masker.mask('key 0xabcdef0123456789 or ABCDEF0123456789')
@@ -165,47 +230,38 @@ masker.mask('raw 0xdeadbeef01020304 DEADBEEF01020304')
 # 'raw *** ***'
 ```
 
-The `repr()` and the JSON form of each value, and the JSON-escaped form of all of them, because the replacement runs on the formatted JSON line. A password with a quote, a backslash or a newline in it is masked when a message shows it with `%r`, as part of `str(dict)` or an exception text, or inside a JSON document:
+A value shown with `repr()`, inside `str(dict)`, in an exception text or inside a JSON document. Quotes, backslashes and newlines in the secret are not a problem:
 
 ```py
-formatter = JsonFormatter(SecretsMasker({'PASSWORD': 'pa"ss\\word\n123'}))
-logger.info('login %r failed with %s', 'pa"ss\\word\n123', json.dumps({'password': 'pa"ss\\word\n123'}))
-# {"name": "app", ..., "msg": "login '***' failed with {\"password\": \"***\"}"}
+password = 'pa"ss\\word\n123'
+logger.info('login %r failed with %s', password, json.dumps({'password': password}))
+# {..., "msg": "login '***' failed with {\"password\": \"***\"}"}
 ```
 
-Overlapping values are masked as one span, nothing of the second one stays visible:
-
-```py
-SecretsMasker({'A': 'abcdefgh', 'B': 'efghijklmnop'}).mask('abcdefghijklmnop')
-# '***'
-```
-
-Numbers and other non-string values in the mapping, by their text:
+Numbers and other non-string values, by their text:
 
 ```py
 SecretsMasker({'PIN': 12345678}).mask('pin 12345678')
 # 'pin ***'
 ```
 
-Longer values are replaced first, so a value that contains another one is replaced as a whole. The limit for a value is `min_length` of `SecretsMasker`, 8 characters by default.
+Two secrets that overlap in the text are masked as one:
+
+```py
+SecretsMasker({'A': 'abcdefgh', 'B': 'efghijklmnop'}).mask('abcdefghijklmnop')
+# '***'
+```
 
 ## What is not masked
 
-A value that is not in the mapping. Masking is a list of known values, not a search for secret-looking text:
+A value that is not in your secrets. The masker replaces known values, it does not search for text that looks like a secret:
 
 ```py
 masker.mask('other secret zzz-not-configured')
 # 'other secret zzz-not-configured'
 ```
 
-Keep the mapping complete, or add `env_heuristic=True` to `setup_logging` so that the values of env variables with SECRET, TOKEN, PASSWORD, PASS, PRIVATE, CREDENTIALS or KEY as a word in the name are added. A marker inside a longer word does not count, `KEYS_API_URL` is a public URL:
-
-```py
-secrets_from_env({'API_TOKEN': 'abc', 'KEYS_API_URL': 'http://x', 'DB_PASS': 'p', 'COMPASS_URL': 'http://c'})
-# {'API_TOKEN': 'abc', 'DB_PASS': 'p'}
-```
-
-A value shorter than 8 characters, the username `user` of the basic auth URL above included. It would hide ordinary text such as ports and flags in every line:
+A value shorter than 8 characters (`min_length`). Otherwise ports, flags and short words would disappear from every line:
 
 ```py
 SecretsMasker({'PORT': '9000'}).mask('listen on 9000')
@@ -214,7 +270,7 @@ masker.mask('login as user')
 # 'login as user'
 ```
 
-A transformed form the masker does not know: base64, or a part of a value shorter than 8 characters:
+A form of the value the masker does not know, such as base64, or a part of the value:
 
 ```py
 masker.mask('dG9rXzlmOGU3ZDZjNWI0YQ==')  # base64 of the token
@@ -223,7 +279,7 @@ masker.mask('prefix a1b2c3')
 # 'prefix a1b2c3'
 ```
 
-The host of a URL, and a route-like path of a URL. They are not secrets, and alerts need them:
+The host of a URL, and a URL path without a key in it. Alerts need them:
 
 ```py
 masker.mask('host rpc.example.com down')
@@ -232,26 +288,55 @@ masker.mask('GET /eth/v1/beacon/genesis')
 # 'GET /eth/v1/beacon/genesis'
 ```
 
-Output written to stdout or stderr without the logger: `print`, or a library that writes to the stream directly.
+Text written to stdout or stderr without the logger: `print`, or a library that writes to the stream directly.
 
-A record that cannot be formatted (wrong `%` arguments, a value `json` cannot serialize) is still written as one masked JSON line with an `error` field, instead of the unmasked `--- Logging error ---` block the standard library prints to stderr:
+## When logging itself fails
+
+A record that cannot be formatted (wrong `%` arguments, a value `json` cannot serialize) is still written as one masked JSON line, with the problem in the `error` field:
 
 ```py
 logger.info('rpc %d %s', 'https://rpc.example.com/v3/a1b2c3d4e5f6', 'x')
-# {"name": "app", ..., "msg": "rpc %d %s", "error": "Log record could not be formatted: TypeError('%d format: a real number is required, not str')", "args": "('***', 'x')"}
+# {..., "msg": "rpc %d %s", "error": "Log record could not be formatted: TypeError('%d format: a real number is required, not str')", "args": "('***', 'x')"}
 ```
 
-A record that cannot be written (the stream is closed, the pipe is broken) is reported by `SafeStreamHandler` with the error and the record location only; the standard handler would print the raw message and arguments.
+The standard library would print this instead, to stderr and without masking:
+
+```text
+--- Logging error ---
+Traceback (most recent call last):
+  ...
+TypeError: %d format: a real number is required, not str
+Message: 'rpc %d %s'
+Arguments: ('https://rpc.example.com/v3/a1b2c3d4e5f6', 'x')
+```
+
+A record that cannot be written (the stream is closed, the pipe is broken) is reported by `SafeStreamHandler` without the record. The standard handler prints the same `Message:` and `Arguments:` lines as above:
+
+```text
+--- Logging error: BrokenPipeError(32, 'Broken pipe') (record from app, /app/main.py:31) ---
+```
+
+An unhandled exception goes through the logger as a CRITICAL line:
+
+```py
+raise ConnectionError(f'Max retries exceeded with url: {RPC_URL}')
+# {"name": "unhandled", "levelname": "CRITICAL", ..., "msg": "Unhandled exception. Shut down.", "error": "Traceback (most recent call last):\n  ...\nConnectionError: Max retries exceeded with url: ***\n"}
+```
+
+Two cases cannot go through the logger and are written to stderr as plain text, masked: a `KeyboardInterrupt` (Ctrl-C is not an error, so there is no CRITICAL line) and an exception when no handler is configured.
 
 ## Log format
 
+Every line has these fields, in this order:
+
 ```json
-{"name": "app", "levelname": "INFO", "funcName": "main", "lineno": 29, "module": "main", "pathname": "/app/src/main.py", "timestamp": 1761600000, "msg": "Config", "value": {"RPC_URL": "***", "API_TOKEN": "***"}}
+{"name": "app", "levelname": "INFO", "funcName": "main", "lineno": 29, "module": "main", "pathname": "/app/main.py", "timestamp": 1761600000, "msg": "Config", "value": {"RPC_URL": "***"}}
 ```
 
-- every line has `name`, `levelname`, `funcName`, `lineno`, `module`, `pathname` and `timestamp` (the record time in whole seconds)
-- a dict message is merged into the line, a string message becomes `msg`; a message key with the name of a record field is written as `msg_<key>`, the record field wins
-- `exc_info` with the traceback is added for `logger.exception()` and `exc_info=True`
+- `name`, `levelname`, `funcName`, `lineno`, `module`, `pathname` - from the log record
+- `timestamp` - the record time in whole seconds
+- `msg` - the string message; a dict message adds its keys after `timestamp` instead. A dict key with the name of a record field (for example `name`) is written as `msg_name`
+- `exc_info` - the traceback, for `logger.exception()` and `exc_info=True`
 - bytes are written as `0x`-hex, dataclasses as dicts, sets as lists, other unknown values as text
 
 ## Development
