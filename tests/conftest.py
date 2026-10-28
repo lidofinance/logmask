@@ -5,6 +5,8 @@ from collections.abc import Iterator
 
 import pytest
 
+from lido_safe_logging import configure
+
 KEY = '0x' + 'ab' * 32
 RPC = 'https://rpc.example/v3/secret-key-1/'
 RPC_2 = 'https://rpc.example/v3/secret-key-2'
@@ -31,24 +33,21 @@ def make_record(msg: object, level: int = logging.INFO, exc_info: object = None)
 
 def assert_no_secret(text: str) -> None:
     for fragment in SECRET_FRAGMENTS:
-        assert fragment not in text, f'{fragment!r} leaked into {text!r}'
-
-
-@pytest.fixture
-def secrets() -> dict[str, object]:
-    return dict(SECRETS)
+        assert fragment.lower() not in text.lower(), f'{fragment!r} leaked into {text!r}'
 
 
 @pytest.fixture
 def restore_logging() -> Iterator[None]:
-    """Keep the root logger and the exception hooks as they were before the test."""
+    """Keep the root logger, the warnings capture, the exception hooks and the process masker as they were."""
     root = logging.getLogger()
     handlers, level = list(root.handlers), root.level
-    sys_hook, thread_hook = sys.excepthook, threading.excepthook
+    hooks = sys.excepthook, threading.excepthook, sys.unraisablehook
+    masker = configure._masker
     try:
         yield
     finally:
         root.handlers[:] = handlers
         root.setLevel(level)
-        sys.excepthook = sys_hook
-        threading.excepthook = thread_hook
+        logging.captureWarnings(False)
+        sys.excepthook, threading.excepthook, sys.unraisablehook = hooks
+        configure._masker = masker

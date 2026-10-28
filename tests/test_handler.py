@@ -1,8 +1,6 @@
 import io
 import logging
 
-import pytest
-
 from lido_safe_logging.formatter import JsonFormatter
 from lido_safe_logging.handler import SafeStreamHandler
 from lido_safe_logging.secrets import SecretsMasker
@@ -17,7 +15,7 @@ class BrokenStream(io.StringIO):
 MASKER = SecretsMasker(SECRETS)
 
 
-def make_handler(masker: SecretsMasker | None = MASKER) -> SafeStreamHandler:
+def make_handler(masker: SecretsMasker = MASKER) -> SafeStreamHandler:
     handler = SafeStreamHandler(BrokenStream(), masker=masker)
     handler.setFormatter(JsonFormatter(masker))
     return handler
@@ -60,8 +58,7 @@ def test_broken_stderr_does_not_raise(monkeypatch):
     make_handler().handle(make_record('x'))
 
 
-@pytest.mark.parametrize('masker', [None, SecretsMasker({})])
-def test_handler_without_secrets_still_reports(capsys, masker):
-    make_handler(masker).handle(make_record('x'))
+def test_handler_without_secrets_still_reports(capsys):
+    make_handler(SecretsMasker({})).handle(make_record('x'))
 
     assert 'Logging error' in capsys.readouterr().err

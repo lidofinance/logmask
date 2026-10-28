@@ -3,7 +3,7 @@ name = "lido-safe-logging"
 version = "0.1.0"
 description = "JSON logging with masked secrets for Python services"
 readme = "README.md"
-license = "GPL-3.0-only"
+license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Lido" }]
 requires-python = ">=3.12,<4"

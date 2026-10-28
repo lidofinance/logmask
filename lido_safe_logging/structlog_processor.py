@@ -1,4 +1,4 @@
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from typing import Any
 
 from .secrets import SecretsMasker
@@ -7,33 +7,21 @@ Processor = Callable[[Any, str, Any], Any]
 
 
 def mask_secrets_processor(masker: SecretsMasker) -> Processor:
-    """A structlog processor that masks the event.
+    """A structlog processor that masks the rendered line.
 
-    Put it last, after the renderer: it then masks the rendered line, keys and JSON-escaped forms included.
-    Before the renderer it masks the string values of the event dict, nested lists, tuples, sets and dicts too.
-    The module does not import structlog: the processor is a plain function with the `(logger, method_name,
-    event_dict)` contract, the service brings its own structlog.
+    Put it last, after the renderer: it then masks the whole line, keys and JSON-escaped forms included. It accepts
+    the output of a renderer, a `str` or `bytes`, and raises TypeError for anything else (an event dict): placed
+    before the renderer it could not mask the objects inside the event, and a silent partial masking is worse than a
+    failure at the first log call. The module does not import structlog: the processor is a plain function with the
+    `(logger, method_name, event_dict)` contract, the service brings its own structlog.
     """
 
     def processor(logger: Any, method_name: str, event: Any) -> Any:
-        return _mask(masker, event)
+        if isinstance(event, str):
+            return masker.mask(event)
+        if isinstance(event, bytes):
+            text = event.decode('utf-8', errors='surrogateescape')
+            return masker.mask(text).encode('utf-8', errors='surrogateescape')
+        raise TypeError(f'mask_secrets_processor must be the last processor, after the renderer; got {type(event).__name__}')
 
     return processor
-
-
-def _mask(masker: SecretsMasker, value: Any) -> Any:
-    if isinstance(value, str):
-        return masker.mask(value)
-    if isinstance(value, bytes):
-        text = value.decode('utf-8', errors='surrogateescape')
-        masked = masker.mask(text)
-        return value if masked == text else masked.encode('utf-8', errors='surrogateescape')
-    if isinstance(value, Mapping):
-        return {key: _mask(masker, item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_mask(masker, item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_mask(masker, item) for item in value)
-    if isinstance(value, set | frozenset):
-        return type(value)(_mask(masker, item) for item in value)
-    return value

@@ -36,7 +36,7 @@ class JsonFormatter(logging.Formatter):
     handler would report the error with the raw message and arguments, without masking.
     """
 
-    def __init__(self, masker: SecretsMasker | None = None):
+    def __init__(self, masker: SecretsMasker):
         super().__init__()
         self._masker = masker
 
@@ -46,7 +46,23 @@ class JsonFormatter(logging.Formatter):
         except Exception as error:  # noqa: BLE001 - any formatting error must become a masked line, see the class docstring
             text = json.dumps(self._fallback_line(record, error))
         # Secrets are hidden in every log line, including messages from third-party libraries.
-        return self._masker.mask(text) if self._masker else text
+        masked = self._masker.mask(text)
+        try:
+            json.loads(masked)
+        except ValueError:
+            # A secret made of JSON syntax (a quote, a brace, `true`) was replaced outside the strings. Mask the
+            # strings one by one instead; the JSON-escaped forms are then not needed, and the syntax stays.
+            masked = json.dumps(self._mask_leaves(json.loads(text)))
+        return masked
+
+    def _mask_leaves(self, value: Any) -> Any:
+        if isinstance(value, str):
+            return self._masker.mask(value)
+        if isinstance(value, dict):
+            return {self._masker.mask(key): self._mask_leaves(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._mask_leaves(item) for item in value]
+        return value
 
     def _base(self, record: logging.LogRecord) -> dict[str, Any]:
         return {

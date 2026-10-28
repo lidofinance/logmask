@@ -1,6 +1,6 @@
 # lido-safe-logging
 
-JSON logging for Python services, with secrets masked. Every log line is one JSON object. Every line goes through a masker that replaces your secret values with `***`. This includes the messages of third-party libraries and the traceback of an unhandled exception.
+JSON logging for Python services, with secrets masked. Every log line is one JSON object. Every line goes through a masker that replaces every form of your secret values with `***`. This includes the messages of third-party libraries, warnings, and the traceback of an unhandled exception.
 
 No runtime dependencies. Python 3.12 or newer.
 
@@ -10,7 +10,7 @@ No runtime dependencies. Python 3.12 or newer.
 poetry add git+https://github.com/lidofinance/lido-safe-logging.git@v0.1.0
 ```
 
-Pin a tag. A Docker build stage that installs the package from git needs `git`.
+Pin a tag, or a commit with `rev`, and commit `poetry.lock`: it records the exact commit. Poetry clones the repository itself; a build stage that installs with `pip` needs `git`.
 
 ## Quick start
 
@@ -36,18 +36,21 @@ Output (one line per record, stderr):
 {"name": "app", "levelname": "INFO", "funcName": "main", "lineno": 13, "module": "main", "pathname": "/app/main.py", "timestamp": 1761600000, "msg": "Connecting to ***"}
 ```
 
-`setup_logging(PRIVATE)` does three things:
+`setup_logging(PRIVATE)` does four things:
 
 - configures the root logger: JSON lines to stderr, level INFO, old handlers removed
-- masks every line with the values of `PRIVATE`
-- installs `sys.excepthook` and `threading.excepthook`, so an unhandled exception becomes one CRITICAL line with a masked traceback
+- masks every line with every form of the values of `PRIVATE`
+- routes `warnings.warn()` through the logger, so a warning text is masked too
+- installs `sys.excepthook`, `threading.excepthook` and `sys.unraisablehook`, so an unhandled exception becomes one CRITICAL line with a masked traceback
 
-`masked_config(PUBLIC, PRIVATE)` builds a dict for the startup log. Public values stay as they are. Private values become `***`. A private list keeps its length, a private dict keeps its keys. An unset private value (`None` or `''`) becomes `''`, so you can see which variables are set. A key present in both dicts raises `ValueError`.
+`masked_config(PUBLIC, PRIVATE)` builds a dict for the startup log. Public values stay as they are. Private values become `***`. A private list keeps its length. An unset private value (`None`, `''` or `b''`) becomes `''`, so you can see which variables are set; any other value, `0` and `False` included, is set and shows `***`. A key present in both dicts raises `ValueError`.
 
 ```py
 masked_config({'PORT': 9000}, {'TOKEN': 'abc', 'RPC_URLS': ['a', 'b'], 'OPTIONAL_KEY': None})
 # {'PORT': 9000, 'TOKEN': '***', 'RPC_URLS': ['***', '***'], 'OPTIONAL_KEY': ''}
 ```
+
+Every value of `PRIVATE` is treated as a secret, whatever it looks like (`None` and booleans are not values). Put a variable there only when its value must never appear in a log: a value such as `true` or `9000` in `PRIVATE` would be masked inside every line, field names included. A realistic set of secrets (the 17 variables of the oracle, about 100 forms) costs about 50 microseconds per line; hundreds of secrets make every line noticeably slower.
 
 ## How to
 
@@ -79,27 +82,21 @@ except ConnectionError:
 setup_logging(PRIVATE, level=os.getenv('LOG_LEVEL', 'INFO'), stream=sys.stdout)
 ```
 
-`level` takes a name or an int. `stream` is stderr by default.
+`level` takes a name in any case or an int. `stream` is stderr by default. Three outputs always go to stderr: the traceback of a KeyboardInterrupt, the report of a handler that cannot write, and the line written when the exception hook itself fails.
 
 ### Add secrets later
 
-`setup_logging` returns the masker. Call `add()` when a secret becomes known after logging is configured, for example a token fetched from a vault or a config module that logs at import time:
+`setup_logging` returns the masker. Pass `{}` and call `add()` when a secret becomes known after logging is configured, for example a token fetched from a vault or a config module that logs at import time:
 
 ```py
-masker = setup_logging()
+masker = setup_logging({})
 
 from app import config  # logs at import time, before the config is known
 
 masker.add(config.PRIVATE)
 ```
 
-Every line from that point on is masked with the new values too.
-
-### Keep the default exception hooks
-
-```py
-setup_logging(PRIVATE, excepthook=False)
-```
+Every line from that point on is masked with the new values too. The lines written before `add()` are not. A second `setup_logging` call in the same process adds its secrets to the same masker, so the secrets of the first call stay masked.
 
 ### Mask text by hand
 
@@ -111,12 +108,14 @@ masker.mask('connect https://rpc.example.com/v3/a1b2c3d4e5f6')
 
 ### Use structlog
 
+Call `setup_logging` as well: structlog does not route the standard-library loggers of `web3`, `urllib3` or `requests` anywhere, and without a configured root logger their warnings go to stderr unmasked.
+
 ```py
 import structlog
 
-from lido_safe_logging import SecretsMasker, mask_secrets_processor
+from lido_safe_logging import mask_secrets_processor, setup_logging
 
-masker = SecretsMasker(PRIVATE)
+masker = setup_logging(PRIVATE)
 structlog.configure(
     processors=[
         structlog.processors.add_log_level,
@@ -127,26 +126,16 @@ structlog.configure(
 )
 ```
 
-Put the processor last, after the renderer. It then masks the whole rendered line. Before the renderer it masks the values of the event dict, including nested lists, tuples, sets and dicts. The package does not depend on structlog: your service installs its own version.
+The processor must be the last one, after the renderer: it masks the rendered line, keys and JSON-escaped forms included. Placed earlier it receives the event dict and raises `TypeError` at the first event that reaches the processors, which with a filtering logger is the first event at or above the configured level, not the first call. Do not render tracebacks with `structlog.processors.dict_tracebacks` in its default form: it prints the local variables of every frame cut to 80 characters, and a cut secret is a part that no form matches. Use `format_exc_info`, or `ExceptionRenderer(ExceptionDictTransformer(show_locals=False))`. The package does not depend on structlog: your service installs its own version.
 
 ### Use the pieces one by one
 
-```py
-import logging
+`setup_logging` wires these classes; they can be used directly, and each of them requires the masker:
 
-from lido_safe_logging import JsonFormatter, SafeStreamHandler, SecretsMasker, install_excepthook
-
-masker = SecretsMasker(PRIVATE)
-handler = SafeStreamHandler(masker=masker)
-handler.setFormatter(JsonFormatter(masker))
-logging.basicConfig(level=logging.INFO, handlers=[handler])
-install_excepthook(masker=masker)
-```
-
-- `SecretsMasker(secrets, min_length=8, masked_value='***')` - the masker; `mask(text)` and `add(secrets)`
-- `JsonFormatter(masker)` - one JSON object per record, masked; without a masker it only formats
+- `SecretsMasker(secrets)` - the masker; `mask(text)` and `add(secrets)`
+- `JsonFormatter(masker)` - one JSON object per record, masked
 - `SafeStreamHandler(stream, masker=masker)` - a `StreamHandler` that does not print the record when the write fails
-- `install_excepthook(masker=masker)` - the exception hooks; the masker covers the output that cannot go through the logger, see below
+- `install_excepthook(masker=masker)` - the three exception hooks; the masker covers the output that cannot go through the logger
 
 ## What is masked
 
@@ -156,7 +145,7 @@ The examples use this masker:
 masker = SecretsMasker(
     {
         'RPC_URL': 'https://rpc.example.com/v3/a1b2c3d4e5f6/',
-        'CL_URL': 'https://user:s3cretPassw0rd@beacon.example.com/eth/v1',
+        'CL_URL': 'https://user:s3cretPassw0rd@beacon.example.com/',
         'API_TOKEN': 'tok_9f8e7d6c5b4a\n',  # read from a file, with the trailing newline
         'RPC_LIST': ['https://one.example.com/key/abcdef123456', 'https://two.example.com/key/ghijkl789012'],
         'NESTED': {'inner': {'token': 'nested-secret-value'}},
@@ -166,7 +155,7 @@ masker = SecretsMasker(
 )
 ```
 
-Each value, and each item of a list, tuple, set or nested dict:
+Each value, each item of a list, tuple, set, nested dict or any other iterable (the keys of a dict are names, they stay), the fields of a dataclass or of any object, the value behind a `SecretStr`-like object (`get_secret_value()`), numbers and paths by their text:
 
 ```py
 masker.mask('connect https://rpc.example.com/v3/a1b2c3d4e5f6/')
@@ -186,39 +175,58 @@ masker.mask('connect https://rpc.example.com/v3/a1b2c3d4e5f6')
 # 'connect ***'
 ```
 
-The path and the query of a URL on their own, when they contain something that looks like a key (8 characters or more, with a digit, or 16 characters or more). HTTP libraries often log only the path:
+The parts of a URL on their own: the host with its credentials, the path, the path with the query, the query, each `name=value` pair, the user name, the password and `user:password`, percent-decoded as well, and the credentials as an HTTP Basic header. HTTP libraries often log only the path:
 
 ```py
 masker.mask("HTTPSConnectionPool(host='rpc.example.com', port=443): Max retries exceeded with url: /v3/a1b2c3d4e5f6")
 # "HTTPSConnectionPool(host='rpc.example.com', port=443): Max retries exceeded with url: ***"
-masker.mask('project a1b2c3d4e5f6 rate limited')
-# 'project *** rate limited'
-```
-
-The password and `user:password` of a URL with basic auth. The username too, when it is 8 characters or longer:
-
-```py
 masker.mask('GET https://user:s3cretPassw0rd@beacon.example.com/eth/v1/beacon/genesis')
-# 'GET ***/beacon/genesis'
-masker.mask('auth user:s3cretPassw0rd rejected')
-# 'auth *** rejected'
+# 'GET ***eth/v1/beacon/genesis'
+masker.mask('auth user:s3cretPassw0rd rejected, header Basic dXNlcjpzM2NyZXRQYXNzdzByZA==')
+# 'auth *** rejected, header Basic ***'
 ```
 
-Hex values in both cases, with and without `0x`. Bytes as text and as hex:
+A single segment of the path, a single query value and the host without its credentials, when they can be a key: 16 characters or more, or 8 or more with a digit. A short word of a URL (`eth`, `v1`, a host like `el`) is masked only as part of the whole path or URL, otherwise it would vanish from every line:
 
 ```py
-masker.mask('key 0xabcdef0123456789 or ABCDEF0123456789')
-# 'key *** or ***'
-masker.mask('raw 0xdeadbeef01020304 DEADBEEF01020304')
-# 'raw *** ***'
+masker.mask('project a1b2c3d4e5f6 rate limited, host beacon.example.com')
+# 'project *** rate limited, host ***'
+masker.mask('GET /eth/v1/beacon/genesis from rpc.example.com')
+# 'GET /eth/v1/beacon/genesis from rpc.example.com'
 ```
 
-A value shown with `repr()`, inside `str(dict)`, in an exception text or inside a JSON document. Quotes, backslashes and newlines in the secret are not a problem:
+Hex values in any case, with and without `0x`, and as the bytes they encode. Bytes as text, as hex and as their `repr()`:
+
+```py
+masker.mask('key 0xabcdef0123456789 or ABCDEF0123456789 or 0XABCDEF0123456789')
+# 'key *** or *** or ***'
+masker.mask("raw 0xdeadbeef01020304 DEADBEEF01020304 b'\\xde\\xad\\xbe\\xef\\x01\\x02\\x03\\x04'")
+# "raw *** *** b'***'"
+masker.mask(repr(bytes.fromhex('ABCDEF0123456789')))
+# "b'***'"
+```
+
+The value percent-encoded (with `quote` and with `quote_plus`), percent-decoded, base64-encoded, and as the hex or the `repr()` of its bytes, as an application writes it into a URL, a header or a bytes body:
+
+```py
+SecretsMasker({'T': 'tok/en+value=1'}).mask('k=tok%2Fen%2Bvalue%3D1 auth dG9rL2VuK3ZhbHVlPTE= body 0x746f6b2f656e2b76616c75653d31')
+# 'k=*** auth *** body 0x***'
+```
+
+A value shown with `repr()`, inside `str(dict)`, in an exception text or inside a JSON document, up to two layers deep (for example the `repr()` of a JSON document). Quotes, backslashes and newlines in the secret are not a problem, and a secret made of JSON syntax (a quote, a brace, `true`) is masked inside the strings of the line, so the line stays valid JSON:
 
 ```py
 password = 'pa"ss\\word\n123'
+masker.add({'PASSWORD': password})
 logger.info('login %r failed with %s', password, json.dumps({'password': password}))
 # {..., "msg": "login '***' failed with {\"password\": \"***\"}"}
+```
+
+The case of the text does not matter:
+
+```py
+masker.mask('TOK_9F8E7D6C5B4A')
+# '***'
 ```
 
 Numbers and other non-string values, by their text:
@@ -244,34 +252,14 @@ masker.mask('other secret zzz-not-configured')
 # 'other secret zzz-not-configured'
 ```
 
-A value shorter than 8 characters (`min_length`). Otherwise ports, flags and short words would disappear from every line:
+A form of the value the masker does not know: a part of the value, a hash of it, more than two layers of escaping:
 
 ```py
-SecretsMasker({'PORT': '9000'}).mask('listen on 9000')
-# 'listen on 9000'
-masker.mask('login as user')
-# 'login as user'
-```
-
-A form of the value the masker does not know, such as base64, or a part of the value:
-
-```py
-masker.mask('dG9rXzlmOGU3ZDZjNWI0YQ==')  # base64 of the token
-# 'dG9rXzlmOGU3ZDZjNWI0YQ=='
 masker.mask('prefix a1b2c3')
 # 'prefix a1b2c3'
 ```
 
-The host of a URL, and a URL path without a key in it. Alerts need them:
-
-```py
-masker.mask('host rpc.example.com down')
-# 'host rpc.example.com down'
-masker.mask('GET /eth/v1/beacon/genesis')
-# 'GET /eth/v1/beacon/genesis'
-```
-
-Text written to stdout or stderr without the logger: `print`, or a library that writes to the stream directly.
+A short word of a URL on its own (see above). Text that does not pass through the root logger: `print`, a library that writes to the stream directly, a logger with its own handler that does not propagate to the root logger, and the message of `sys.exit('...')`, which the interpreter prints without calling the exception hook.
 
 ## When logging itself fails
 
@@ -293,7 +281,7 @@ Message: 'rpc %d %s'
 Arguments: ('https://rpc.example.com/v3/a1b2c3d4e5f6', 'x')
 ```
 
-A record that cannot be written (the stream is closed, the pipe is broken) is reported by `SafeStreamHandler` without the record. The standard handler prints the same `Message:` and `Arguments:` lines as above:
+A record that cannot be written (the stream is closed, the pipe is broken) is reported by `SafeStreamHandler` without the record, where the standard handler would print the same `Message:` and `Arguments:` lines as above:
 
 ```text
 --- Logging error: BrokenPipeError(32, 'Broken pipe') (record from app, /app/main.py:31) ---
@@ -306,7 +294,9 @@ raise ConnectionError(f'Max retries exceeded with url: {RPC_URL}')
 # {"name": "unhandled", "levelname": "CRITICAL", ..., "msg": "Unhandled exception. Shut down.", "error": "Traceback (most recent call last):\n  ...\nConnectionError: Max retries exceeded with url: ***\n"}
 ```
 
-Two cases cannot go through the logger and are written to stderr as plain text, masked: a `KeyboardInterrupt` (Ctrl-C is not an error, so there is no CRITICAL line) and an exception when no handler is configured.
+An exception in another thread gives the same line with `"msg": "Unhandled exception in a thread."` and a `thread` field; the process goes on, as with the default hook. An exception in `__del__` or in a callback (`sys.unraisablehook`) gives `"msg": "Unraisable exception."`.
+
+Three cases cannot go through the logger and are written to stderr masked: a `KeyboardInterrupt` (Ctrl-C is not an error, so there is no CRITICAL line, the traceback is printed as plain text), an exception when no handler is configured (one JSON line written by the hook itself), and a failure of the hook (one line with the exception name).
 
 ## Log format
 
@@ -332,6 +322,6 @@ poetry run pytest
 
 ## Release
 
-1. Set the version in `pyproject.toml` and add a section to `CHANGELOG.md`.
+1. Set the version in `pyproject.toml` and move the `Unreleased` section of `CHANGELOG.md` under the version and the date.
 2. Merge to `main` and create the tag `vX.Y.Z`.
-3. Consumers update the tag in their `pyproject.toml`.
+3. Consumers update the tag in their `pyproject.toml` and run `poetry lock`.

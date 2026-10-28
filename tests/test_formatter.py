@@ -3,9 +3,13 @@ import json
 import logging
 from decimal import Decimal
 
+import pytest
+
 from lido_safe_logging.formatter import JsonFormatter, json_default
 from lido_safe_logging.secrets import MASKED_VALUE, SecretsMasker
 from tests.conftest import KEY, RPC, SECRETS, assert_no_secret, make_record
+
+PLAIN = JsonFormatter(SecretsMasker({}))
 
 
 @dataclasses.dataclass
@@ -35,8 +39,8 @@ def test_json_formatter_masks_json_escaped_secret():
     assert json.loads(line)['msg'] == MASKED_VALUE
 
 
-def test_json_formatter_without_masker_keeps_the_text():
-    line = JsonFormatter().format(make_record({'msg': RPC}))
+def test_json_formatter_with_no_secrets_keeps_the_text():
+    line = PLAIN.format(make_record({'msg': RPC}))
 
     assert json.loads(line)['msg'] == RPC
 
@@ -45,7 +49,7 @@ def test_json_formatter_field_names_match_the_bots():
     record = make_record('hello %s', logging.WARNING)
     record.args = ('world',)
 
-    line = json.loads(JsonFormatter().format(record))
+    line = json.loads(PLAIN.format(record))
 
     assert list(line) == ['name', 'levelname', 'funcName', 'lineno', 'module', 'pathname', 'timestamp', 'msg']
     assert line['name'] == 'test'
@@ -59,11 +63,11 @@ def test_json_formatter_timestamp_is_the_record_time_in_seconds():
     record = make_record('x')
     record.created = 1761600000.75
 
-    assert json.loads(JsonFormatter().format(record))['timestamp'] == 1761600000
+    assert json.loads(PLAIN.format(record))['timestamp'] == 1761600000
 
 
 def test_json_formatter_keeps_message_keys():
-    line = json.loads(JsonFormatter().format(make_record({'msg': 'Report', 'value': 10, 'slot': 42})))
+    line = json.loads(PLAIN.format(make_record({'msg': 'Report', 'value': 10, 'slot': 42})))
 
     assert line['msg'] == 'Report'
     assert line['value'] == 10
@@ -82,7 +86,7 @@ def test_json_default_converts_bytes_dataclasses_sets_and_unknown_values():
 def test_json_formatter_serializes_values_the_bots_log():
     message = {'msg': 'Report', 'report': Report(1, b'\x0a'), 'raw': b'\x01', 'amount': Decimal('1.5'), 'ids': {3}}
 
-    line = json.loads(JsonFormatter().format(make_record(message)))
+    line = json.loads(PLAIN.format(make_record(message)))
 
     assert line['report'] == {'ref_slot': 1, 'root': '0x0a'}
     assert line['raw'] == '0x01'
@@ -105,7 +109,7 @@ def test_json_formatter_adds_masked_exc_info():
 
 
 def test_json_formatter_has_no_exc_info_field_without_exception():
-    assert 'exc_info' not in json.loads(JsonFormatter().format(make_record('x')))
+    assert 'exc_info' not in json.loads(PLAIN.format(make_record('x')))
 
 
 def test_json_formatter_masks_a_record_that_cannot_be_formatted():
@@ -124,7 +128,7 @@ def test_json_formatter_masks_a_record_that_cannot_be_formatted():
 def test_message_keys_do_not_overwrite_the_record_fields():
     record = make_record({'msg': 'login', 'name': 'alice', 'timestamp': 'yesterday', 'user': 'bob'})
 
-    line = json.loads(JsonFormatter().format(record))
+    line = json.loads(PLAIN.format(record))
 
     assert line['name'] == 'test'
     assert isinstance(line['timestamp'], int)
@@ -150,7 +154,7 @@ def test_fallback_line_survives_values_whose_repr_raises():
     assert line['args'] == '<unprintable>'
 
     record = make_record(Unprintable())
-    line = json.loads(JsonFormatter().format(record))
+    line = json.loads(PLAIN.format(record))
 
     assert line['msg'] == '<unprintable>'
 
@@ -164,6 +168,7 @@ def test_json_formatter_masks_a_secret_logged_as_repr_or_as_json():
         f'payload {json.dumps({"p": secret})}',
         f'error {KeyError(secret)!s}',
         f'config { ({"p": secret})!s}',
+        f'resp {json.dumps({"p": secret})!r}',
     ):
         line = formatter.format(make_record(message))
 
@@ -171,14 +176,15 @@ def test_json_formatter_masks_a_secret_logged_as_repr_or_as_json():
         assert MASKED_VALUE in line
 
 
-def test_json_formatter_masks_a_bytes_secret_logged_as_hex():
+def test_json_formatter_masks_a_bytes_secret_logged_as_hex_or_as_repr():
     raw = bytes.fromhex('a1b2c3d4e5f6a7b8')
     formatter = JsonFormatter(SecretsMasker({'KEY': raw}))
 
-    line = json.loads(formatter.format(make_record({'msg': 'key', 'raw': raw, 'hex': raw.hex().upper()})))
+    line = json.loads(formatter.format(make_record({'msg': 'key', 'raw': raw, 'hex': raw.hex().upper(), 'repr': repr(raw)})))
 
     assert line['raw'] == MASKED_VALUE
     assert line['hex'] == MASKED_VALUE
+    assert line['repr'] == f"b'{MASKED_VALUE}'"
 
 
 def test_json_formatter_masks_a_dict_message_json_cannot_serialize():
@@ -188,3 +194,14 @@ def test_json_formatter_masks_a_dict_message_json_cannot_serialize():
 
     assert 'Log record could not be formatted' in line['error']
     assert_no_secret(json.dumps(line))
+
+
+@pytest.mark.parametrize('secret', ['"', '{', '}', ':', ',', 'true', 'null', 'n', 'u', '00', '\\', '", "'])
+def test_masked_line_stays_valid_json_for_a_secret_made_of_json_syntax(secret):
+    formatter = JsonFormatter(SecretsMasker({'S': secret}))
+
+    line = formatter.format(make_record({'msg': f'got {secret} here', 'value': [secret, {'k': 'caf\u00e9'}]}))
+
+    parsed = json.loads(line)
+    assert secret not in parsed['msg']
+    assert MASKED_VALUE in parsed['msg']
