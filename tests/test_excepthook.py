@@ -64,14 +64,58 @@ def test_logger_name_is_configurable():
     assert json.loads(stream.getvalue())['name'] == 'my-app'
 
 
-def test_keyboard_interrupt_goes_to_the_default_hook(monkeypatch, unhandled_log):
-    calls = []
-    monkeypatch.setattr(sys, '__excepthook__', lambda *args: calls.append(args))
+def raise_keyboard_interrupt_during_error_handling() -> KeyboardInterrupt:
+    try:
+        try:
+            raise ConnectionError(f'Max retries exceeded with url: {RPC}')
+        except ConnectionError:
+            # Ctrl-C while an error is handled: the traceback prints both, the context carries the URL.
+            raise KeyboardInterrupt  # noqa: B904 - the implicit context is the point of this helper
+    except KeyboardInterrupt as interrupt:
+        return interrupt
 
+
+def test_keyboard_interrupt_is_printed_masked_and_not_logged(capsys, unhandled_log):
+    interrupt = raise_keyboard_interrupt_during_error_handling()
+
+    log_unhandled_exception(type(interrupt), interrupt, interrupt.__traceback__, masker=SecretsMasker(SECRETS))
+
+    report = capsys.readouterr().err
+    assert 'KeyboardInterrupt' in report
+    assert 'ConnectionError' in report
+    assert_no_secret(report)
+    assert unhandled_log.getvalue() == ''
+
+
+def test_keyboard_interrupt_without_a_masker_is_printed_as_is(capsys, unhandled_log):
     log_unhandled_exception(KeyboardInterrupt, KeyboardInterrupt(), None)
 
-    assert len(calls) == 1
+    assert capsys.readouterr().err.rstrip() == 'KeyboardInterrupt'
     assert unhandled_log.getvalue() == ''
+
+
+def test_unhandled_exception_without_a_handler_is_written_masked_to_stderr(capsys, restore_logging):
+    logging.getLogger().handlers[:] = []
+    error = raise_connection_error()
+
+    log_unhandled_exception(type(error), error, error.__traceback__, logger_name='no-handler', masker=SecretsMasker(SECRETS))
+
+    line = json.loads(capsys.readouterr().err)
+    assert line['name'] == 'no-handler'
+    assert line['levelname'] == 'CRITICAL'
+    assert 'ConnectionError' in line['error']
+    assert_no_secret(line['error'])
+
+
+def test_install_excepthook_passes_the_masker_to_the_hooks(capsys, restore_logging, unhandled_log):
+    masker = SecretsMasker({})
+    install_excepthook(masker=masker)
+    masker.add(SECRETS)
+    interrupt = raise_keyboard_interrupt_during_error_handling()
+
+    sys.excepthook(type(interrupt), interrupt, interrupt.__traceback__)
+
+    assert_no_secret(capsys.readouterr().err)
 
 
 def test_install_excepthook_sets_sys_and_threading_hooks(restore_logging, unhandled_log):

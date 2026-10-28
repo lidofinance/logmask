@@ -4,6 +4,7 @@ from typing import IO, Any
 
 from .excepthook import install_excepthook
 from .formatter import JsonFormatter
+from .handler import SafeStreamHandler
 from .secrets import SecretsMasker, secrets_from_env
 
 
@@ -18,9 +19,9 @@ def setup_logging(
     """Configure the root logger: JSON lines to the stream (stderr by default), every line masked.
 
     `secrets` is the explicit mapping of private variables (the PRIVATE_ENV_VARS of a bot). With `env_heuristic` the
-    values of every environment variable with SECRET, TOKEN, PASSWORD, PASS, PRIVATE, CREDENTIALS or KEY in its name
-    are masked too. Existing handlers of the root logger are replaced. Returns the masker, for a structlog processor or
-    for masking text by hand.
+    values of every environment variable with SECRET, TOKEN, PASSWORD, PASS, PRIVATE, CREDENTIALS or KEY as a word in
+    its name are masked too. Existing handlers of the root logger are replaced. Returns the masker: secrets read
+    later are added with `masker.add()`, and the same masker serves a structlog processor or masks text by hand.
     """
     all_secrets: dict[str, Any] = dict(secrets or {})
     if env_heuristic:
@@ -29,10 +30,10 @@ def setup_logging(
         all_secrets.update({f'env:{name}': value for name, value in secrets_from_env().items()})
     masker = SecretsMasker(all_secrets)
 
-    handler = logging.StreamHandler(stream)
+    handler = SafeStreamHandler(stream, masker=masker)
     handler.setFormatter(JsonFormatter(masker))
     logging.basicConfig(level=level, handlers=[handler], force=True)
 
     if excepthook:
-        install_excepthook()
+        install_excepthook(masker=masker)
     return masker

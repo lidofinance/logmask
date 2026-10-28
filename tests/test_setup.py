@@ -5,6 +5,7 @@ import sys
 import threading
 
 from lido_safe_logging.configure import setup_logging
+from lido_safe_logging.handler import SafeStreamHandler
 from lido_safe_logging.secrets import MASKED_VALUE, SecretsMasker
 from tests.conftest import KEY, RPC, RPC_2, SECRETS, assert_no_secret
 
@@ -83,6 +84,19 @@ def test_setup_logging_can_skip_the_exception_hooks(restore_logging):
 
     assert sys.excepthook is sys_hook_before
     assert threading.excepthook is thread_hook_before
+
+
+def test_setup_logging_uses_the_safe_handler_and_secrets_added_later_are_masked(restore_logging):
+    stream = io.StringIO()
+
+    masker = setup_logging(stream=stream, excepthook=False)
+    logging.getLogger('bot').info('before: late-secret-9')
+    masker.add({'LATE_TOKEN': 'late-secret-9'})
+    logging.getLogger('bot').info('after: late-secret-9')
+
+    lines = [json.loads(line)['msg'] for line in stream.getvalue().splitlines()]
+    assert lines == ['before: late-secret-9', f'after: {MASKED_VALUE}']
+    assert isinstance(logging.getLogger().handlers[0], SafeStreamHandler)
 
 
 def test_setup_logging_env_heuristic_keeps_the_explicit_parsed_value(restore_logging, monkeypatch):
