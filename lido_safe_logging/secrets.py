@@ -1,19 +1,15 @@
 import contextlib
 import json
-import os
 import re
 import threading
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from urllib.parse import unquote, urlsplit
 
 MASKED_VALUE = '***'
 # Shorter values are not masked: they would hide ordinary text (ports, flags) in every log line.
 MIN_SECRET_LENGTH = 8
-# The usual words in the name of an environment variable that holds a secret.
-DEFAULT_SECRET_NAME_MARKERS = ('SECRET', 'TOKEN', 'PASSWORD', 'PASS', 'PRIVATE', 'CREDENTIALS', 'KEY')
 
 _HEX = re.compile(r'(0x)?([0-9a-fA-F]+)', re.ASCII)
-_NAME_TOKENS = re.compile(r'[^0-9A-Z]+', re.ASCII)
 
 
 def _key_like(text: str, min_length: int) -> bool:
@@ -181,20 +177,3 @@ class SecretsMasker:
             last = end
         parts.append(text[last:])
         return ''.join(parts)
-
-
-def secrets_from_env(
-    environ: Mapping[str, str] | None = None,
-    *,
-    markers: Iterable[str] = DEFAULT_SECRET_NAME_MARKERS,
-) -> dict[str, str]:
-    """Values of the environment variables whose name has one of the markers as a word (case does not matter).
-
-    Words are the parts of the name between underscores and other separators: KEY matches WALLET_PRIVATE_KEY and
-    not KEYS_API_URL, PASS matches DB_PASS and not COMPASS_URL. Empty values are dropped. This adds to an explicit list
-    of secrets, it does not replace it: a secret under a name without a marker stays unmasked.
-    """
-    if environ is None:
-        environ = os.environ
-    upper_markers = {marker.upper() for marker in markers}
-    return {name: value for name, value in environ.items() if value and upper_markers & set(_NAME_TOKENS.split(name.upper()))}

@@ -1,6 +1,6 @@
 import json
 
-from lido_safe_logging.secrets import MASKED_VALUE, SecretsMasker, secret_values, secrets_from_env
+from lido_safe_logging.secrets import MASKED_VALUE, SecretsMasker, secret_values
 from tests.conftest import CL_URL, KEY, RPC, RPC_2, SECRETS, assert_no_secret
 
 
@@ -221,37 +221,3 @@ def test_masker_exposes_values_for_diagnostics():
 
 def test_masker_without_secrets_keeps_the_text():
     assert SecretsMasker({}).mask(RPC) == RPC
-
-
-def test_secrets_from_env_picks_marker_names_and_drops_empty():
-    environ = {
-        'WALLET_PRIVATE_KEY': KEY,
-        'API_TOKEN': 'token-value',
-        'db_password': 'pass-value',
-        'EMPTY_SECRET': '',
-        'PROMETHEUS_PORT': '9000',
-        'LIDO_LOCATOR': '0xC1d0',
-        # A marker inside a longer word is not a marker: these are public URLs.
-        'KEYS_API_URL': 'https://keys.example',
-        'COMPASS_URL': 'https://compass.example',
-        'DB_PASS': 'pass-value-2',
-    }
-
-    assert secrets_from_env(environ) == {
-        'WALLET_PRIVATE_KEY': KEY,
-        'API_TOKEN': 'token-value',
-        'db_password': 'pass-value',
-        'DB_PASS': 'pass-value-2',
-    }
-
-
-def test_secrets_from_env_reads_os_environ_by_default(monkeypatch):
-    monkeypatch.setenv('LSL_TEST_SECRET', 'value-from-env')
-
-    assert secrets_from_env()['LSL_TEST_SECRET'] == 'value-from-env'
-
-
-def test_secrets_from_env_markers_are_configurable():
-    environ = {'MY_URI': 'https://x.example/key', 'MY_TOKEN': 'token-value'}
-
-    assert secrets_from_env(environ, markers=('URI',)) == {'MY_URI': 'https://x.example/key'}

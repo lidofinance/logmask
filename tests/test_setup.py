@@ -7,7 +7,7 @@ import threading
 from lido_safe_logging.configure import setup_logging
 from lido_safe_logging.handler import SafeStreamHandler
 from lido_safe_logging.secrets import MASKED_VALUE, SecretsMasker
-from tests.conftest import KEY, RPC, RPC_2, SECRETS, assert_no_secret
+from tests.conftest import KEY, RPC, SECRETS, assert_no_secret
 
 
 def test_setup_logging_configures_the_root_logger_with_masked_json(restore_logging):
@@ -48,26 +48,6 @@ def test_setup_logging_without_secrets_masks_nothing(restore_logging):
     assert json.loads(stream.getvalue())['msg'] == RPC
 
 
-def test_setup_logging_env_heuristic_adds_values_from_the_environment(restore_logging, monkeypatch):
-    monkeypatch.setenv('LSL_TEST_API_TOKEN', 'token-from-env-1')
-    stream = io.StringIO()
-
-    setup_logging({'WALLET_PRIVATE_KEY': KEY}, stream=stream, env_heuristic=True, excepthook=False)
-    logging.getLogger('bot').info('token-from-env-1 and %s', KEY)
-
-    assert json.loads(stream.getvalue())['msg'] == f'{MASKED_VALUE} and {MASKED_VALUE}'
-
-
-def test_setup_logging_without_env_heuristic_ignores_the_environment(restore_logging, monkeypatch):
-    monkeypatch.setenv('LSL_TEST_API_TOKEN', 'token-from-env-2')
-    stream = io.StringIO()
-
-    setup_logging({}, stream=stream, excepthook=False)
-    logging.getLogger('bot').info('token-from-env-2')
-
-    assert json.loads(stream.getvalue())['msg'] == 'token-from-env-2'
-
-
 def test_setup_logging_installs_the_exception_hooks_by_default(restore_logging):
     sys_hook_before, thread_hook_before = sys.excepthook, threading.excepthook
 
@@ -97,14 +77,3 @@ def test_setup_logging_uses_the_safe_handler_and_secrets_added_later_are_masked(
     lines = [json.loads(line)['msg'] for line in stream.getvalue().splitlines()]
     assert lines == ['before: late-secret-9', f'after: {MASKED_VALUE}']
     assert isinstance(logging.getLogger().handlers[0], SafeStreamHandler)
-
-
-def test_setup_logging_env_heuristic_keeps_the_explicit_parsed_value(restore_logging, monkeypatch):
-    monkeypatch.setenv('LSL_TEST_RPC_TOKEN', f'{RPC},{RPC_2}')
-    stream = io.StringIO()
-
-    setup_logging({'LSL_TEST_RPC_TOKEN': [RPC, RPC_2]}, stream=stream, env_heuristic=True, excepthook=False)
-    logging.getLogger('bot').info('cannot reach %s; raw %s', RPC, f'{RPC},{RPC_2}')
-
-    assert_no_secret(stream.getvalue())
-    assert json.loads(stream.getvalue())['msg'] == f'cannot reach {MASKED_VALUE}; raw {MASKED_VALUE}'

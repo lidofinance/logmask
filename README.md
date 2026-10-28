@@ -95,23 +95,6 @@ masker.add(config.PRIVATE)
 
 Every line from that point on is masked with the new values too.
 
-### Also mask by the variable name
-
-`env_heuristic=True` adds the values of every environment variable with `SECRET`, `TOKEN`, `PASSWORD`, `PASS`, `PRIVATE`, `CREDENTIALS` or `KEY` as a word in its name:
-
-```py
-setup_logging(PRIVATE, env_heuristic=True)
-```
-
-A word means a part of the name between underscores. `WALLET_PRIVATE_KEY` and `DB_PASS` match. `KEYS_API_URL` and `COMPASS_URL` do not:
-
-```py
-secrets_from_env({'API_TOKEN': 'abc', 'KEYS_API_URL': 'http://x', 'DB_PASS': 'p', 'COMPASS_URL': 'http://c'})
-# {'API_TOKEN': 'abc', 'DB_PASS': 'p'}
-```
-
-The heuristic adds to `PRIVATE`, it does not replace it. A secret under a name without a marker stays unmasked unless it is in `PRIVATE`.
-
 ### Keep the default exception hooks
 
 ```py
