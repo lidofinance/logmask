@@ -247,3 +247,33 @@ def test_unraisable_hook_keeps_the_interpreter_message_when_it_is_given(restore_
     line = json.loads(unhandled_log.getvalue())
     assert line['context'] == f'Exception ignored on {MASKED_VALUE}'
     assert_no_secret(line['error'])
+
+
+def test_no_handler_line_names_the_hook_as_the_origin(capsys, restore_logging):
+    logging.getLogger().handlers[:] = []
+    install_excepthook(masker=MASKER)
+    error = raise_connection_error()
+
+    sys.excepthook(type(error), error, error.__traceback__)
+
+    line = json.loads(capsys.readouterr().err)
+    assert line['pathname'] == '(unknown file)'
+    assert line['lineno'] == 0
+    assert 'Traceback (most recent call last)' in line['error']
+    assert 'raise_connection_error' in line['error']
+
+
+def test_thread_and_unraisable_lines_carry_the_full_traceback(restore_logging, unhandled_log):
+    install_excepthook(masker=MASKER)
+    error = raise_connection_error()
+
+    threading.excepthook(threading.ExceptHookArgs([type(error), error, error.__traceback__, None]))
+    raise_unraisable_connection_error()
+
+    lines = [json.loads(line) for line in unhandled_log.getvalue().splitlines()]
+    assert [line['msg'] for line in lines] == ['Unhandled exception in a thread.', 'Unraisable exception.']
+    assert 'thread' not in lines[0]
+    for line in lines:
+        assert 'Traceback (most recent call last)' in line['error']
+        assert 'ConnectionError: Max retries exceeded' in line['error']
+    assert lines[1]['context'].endswith('RaisesOnDelete') or 'Exception ignored' in lines[1]['context']

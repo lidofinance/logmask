@@ -247,3 +247,13 @@ def test_a_message_that_cannot_be_encoded_by_the_stream_does_not_leak_through_th
     report = capsys.readouterr().err
     assert 'UnicodeEncodeError' in report
     assert_no_secret(report)
+
+
+def test_leaf_masking_keeps_the_other_values_of_the_line():
+    formatter = JsonFormatter(SecretsMasker({'S': '"'}))
+
+    parsed = json.loads(formatter.format(make_record({'msg': 'a " b', 'items': ['x', 1, None, {'k': 'y"z'}], 'n': 2})))
+
+    assert parsed['msg'] == f'a {MASKED_VALUE} b'
+    assert parsed['items'] == ['x', 1, None, {'k': f'y{MASKED_VALUE}z'}]
+    assert parsed['n'] == 2

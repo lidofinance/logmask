@@ -143,3 +143,30 @@ def test_a_warning_with_the_secret_in_its_filename_and_category_is_masked(restor
     assert 'insecure request' in line['msg']
     assert_no_secret(stream.getvalue())
     assert capsys.readouterr().err == ''
+
+
+class BrokenStream(io.StringIO):
+    def write(self, text: str) -> int:
+        raise OSError(32, 'Broken pipe')
+
+
+def test_setup_logging_wires_the_masker_into_the_handler_error_report_and_the_hooks(restore_logging, capsys):
+    setup_logging(SECRETS, stream=BrokenStream())
+    logging.getLogger('bot').error('key %s', KEY)
+
+    report = capsys.readouterr().err
+    assert '[logmask] Logging error' in report
+    assert 'Broken pipe' in report
+    assert_no_secret(report)
+
+    stream = io.StringIO()
+    setup_logging(SECRETS, stream=stream)
+    try:
+        raise ConnectionError(f'Max retries exceeded with url: {RPC}')
+    except ConnectionError as error:
+        sys.excepthook(type(error), error, error.__traceback__)
+
+    line = json.loads(stream.getvalue())
+    assert line['msg'] == 'Unhandled exception. Shut down.'
+    assert 'ConnectionError' in line['error']
+    assert_no_secret(stream.getvalue())

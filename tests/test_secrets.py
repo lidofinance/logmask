@@ -410,3 +410,61 @@ def test_add_while_other_threads_mask():
 
     assert errors == []
     assert masker.mask('x first-secret-1 y late-secret-2') == f'x {MASKED_VALUE} y {MASKED_VALUE}'
+
+
+def test_cycles_through_dataclasses_objects_and_iterables_stop():
+    from collections import deque
+
+    @dataclasses.dataclass
+    class Node:
+        secret: str
+        next: object = None
+
+    class Holder:
+        def __init__(self) -> None:
+            self.secret = 'object-cycle-1'
+            self.me = self
+
+    node = Node('dataclass-cycle-1')
+    node.next = node
+    ring: deque[object] = deque(['deque-cycle-1'])
+    ring.append(ring)
+
+    assert SecretsMasker({'A': node, 'B': Holder(), 'C': ring}).mask('dataclass-cycle-1 object-cycle-1 deque-cycle-1') == ' '.join(
+        [MASKED_VALUE] * 3
+    )
+
+
+def test_containers_inside_dataclass_fields_wrapped_values_and_iterables_are_searched():
+    from collections import deque
+
+    @dataclasses.dataclass(slots=True)
+    class Keys:
+        items: list[str]
+
+    class Wrapped:
+        def get_secret_value(self) -> list[str]:
+            return ['wrapped-list-1']
+
+    masker = SecretsMasker({'A': Keys(['field-list-1']), 'B': Wrapped(), 'C': deque([('deque-tuple-1',)])})
+
+    assert masker.mask('field-list-1 wrapped-list-1 deque-tuple-1') == ' '.join([MASKED_VALUE] * 3)
+
+
+def test_a_four_character_value_gets_its_encoded_forms():
+    masker = SecretsMasker({'A': 'ab+c'})
+
+    assert masker.mask(f'{base64.b64encode(b"ab+c").decode()} ab%2Bc') == f'{MASKED_VALUE} {MASKED_VALUE}'
+
+
+def test_url_with_a_password_and_no_user_name():
+    masker = SecretsMasker({'U': 'https://:only-pass-word-1@host.example/'})
+
+    assert masker.mask('auth :only-pass-word-1 pw only-pass-word-1') == f'auth {MASKED_VALUE} pw {MASKED_VALUE}'
+
+
+def test_masking_after_a_character_whose_lower_case_changes_the_length():
+    # 'İ'.lower() is two characters: the ASCII fast path must not be used for such text.
+    masker = SecretsMasker({'K': 'KEY-0123456789'})
+
+    assert masker.mask('İstanbul key-0123456789 İzmir KEY-0123456789') == f'İstanbul {MASKED_VALUE} İzmir {MASKED_VALUE}'

@@ -2,7 +2,11 @@ import sys
 import tomllib
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
+# mutmut copies the package into mutants/ and adds its own import to every module.
+UNDER_MUTMUT = 'mutants' in ROOT.parts
 
 
 def test_package_declares_no_runtime_dependencies():
@@ -16,6 +20,7 @@ def test_package_declares_no_runtime_dependencies():
     assert 'optional-dependencies' not in project
 
 
+@pytest.mark.skipif(UNDER_MUTMUT, reason='mutmut adds its own import to the mutated modules')
 def test_package_imports_only_the_standard_library():
     third_party = []
     for module in (ROOT / 'logmask').glob('*.py'):

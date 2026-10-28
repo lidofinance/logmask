@@ -58,3 +58,7 @@ typeCheckingMode = "standard"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.mutmut]
+source_paths = ["logmask"]
+pytest_add_cli_args_test_selection = ["tests"]

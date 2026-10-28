@@ -1,0 +1,46 @@
+name: Mutation tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # Surviving mutants that are known to be equivalent (spelling of 'utf-8', the wording of messages, the references
+  # kept in the cycle guard). Raise the number only after reading the new survivors with `mutmut show`.
+  MAX_SURVIVORS: 50
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Python and Poetry
+        uses: ./.github/actions/setup
+        with:
+          python-version: '3.14'
+
+      - name: Install mutmut
+        # A CI-only tool, outside the lock file: the package must keep no runtime dependencies.
+        run: poetry run pip install "mutmut==3.8.1"
+
+      - name: Run the mutants
+        run: poetry run mutmut run
+
+      - name: Survivors
+        run: |
+          poetry run mutmut results | tee results.txt
+          survivors=$(grep -c ': survived' results.txt || true)
+          echo "survived: $survivors (limit $MAX_SURVIVORS)"
+          if [ "$survivors" -gt "$MAX_SURVIVORS" ]; then
+            echo "::error::$survivors mutants survived, more than the $MAX_SURVIVORS known equivalent ones. Read them with: poetry run mutmut show <name>"
+            exit 1
+          fi

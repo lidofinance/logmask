@@ -320,6 +320,17 @@ poetry run ruff format --check . && poetry run ruff check . && poetry run pyrigh
 poetry run pytest
 ```
 
+Mutation tests check that the suite notices a weaker masker. They run in CI on every push and pull request; locally:
+
+```bash
+poetry run pip install "mutmut==3.8.1"
+poetry run mutmut run
+poetry run mutmut results           # the survivors
+poetry run mutmut show <mutant>     # the diff of one survivor
+```
+
+About 50 mutants survive by design (the spelling of `utf-8`, the wording of messages, the references kept by the cycle guard); CI fails above that number.
+
 ## Release
 
 1. Set the version in `pyproject.toml` and move the `Unreleased` section of `CHANGELOG.md` under the version and the date.

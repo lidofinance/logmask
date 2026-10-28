@@ -34,7 +34,7 @@ def test_processor_after_the_renderer_masks_the_rendered_line():
 def test_processor_before_the_renderer_raises_at_the_first_log_call():
     log = make_logger(io.StringIO(), [mask_secrets_processor(SecretsMasker(SECRETS)), structlog.processors.JSONRenderer()])
 
-    with pytest.raises(TypeError, match='must be the last processor'):
+    with pytest.raises(TypeError, match='must be the last processor.*got dict'):
         log.info('Connect', url=RPC)
 
 
