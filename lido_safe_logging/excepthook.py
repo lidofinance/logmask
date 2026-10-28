@@ -92,10 +92,10 @@ def install_excepthook(*, masker: SecretsMasker) -> None:
 
     def unraisable_hook(args: sys.UnraisableHookArgs) -> None:
         # An exception in __del__, in a weakref callback or in a GC hook: the default hook prints it to stderr.
-        # err_msg says where ("Exception ignored in: ..."); the object itself is not logged, its repr is unknown text.
-        _log_exception(
-            args.exc_type, args.exc_value, args.exc_traceback, masker=masker, message='Unraisable exception.', context=args.err_msg
-        )
+        # err_msg says where, when the interpreter sets it (Python 3.14 and later); otherwise the type of the object
+        # stands in. The object itself is not logged, its repr is unknown text.
+        context = args.err_msg or f'Exception ignored in: {type(args.object).__name__}'
+        _log_exception(args.exc_type, args.exc_value, args.exc_traceback, masker=masker, message='Unraisable exception.', context=context)
 
     sys.excepthook = hook
     threading.excepthook = thread_hook
