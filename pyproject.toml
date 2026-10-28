@@ -1,0 +1,62 @@
+[project]
+name = "lido-safe-logging"
+version = "0.1.0"
+description = "JSON logging with masked secrets for Lido Python services"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Lido" }]
+requires-python = ">=3.12,<4"
+dependencies = []
+
+[project.optional-dependencies]
+structlog = ["structlog>=24.1"]
+
+[project.urls]
+Repository = "https://github.com/lidofinance/lido-safe-logging"
+
+[tool.poetry]
+packages = [{ include = "lido_safe_logging" }]
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^9.0"
+ruff = "^0.14"
+pyright = "^1.1"
+structlog = ">=24.1"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 140
+target-version = "py312"
+
+[tool.ruff.lint]
+extend-select = [
+    # pycodestyle
+    "E",
+    # Pyflakes
+    "F",
+    # pyupgrade
+    "UP",
+    # flake8-bugbear
+    "B",
+    # flake8-simplify
+    "SIM",
+    # isort
+    "I",
+]
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"
+docstring-code-format = true
+
+[tool.pyright]
+include = ["lido_safe_logging", "tests"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
