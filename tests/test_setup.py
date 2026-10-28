@@ -3,6 +3,7 @@ import json
 import logging
 import sys
 import threading
+import uuid
 import warnings
 
 import pytest
@@ -57,7 +58,9 @@ def test_setup_logging_with_an_empty_mapping_masks_nothing_until_add(restore_log
 def test_a_logger_without_handlers_that_does_not_propagate_is_masked_too(restore_logging):
     stream = io.StringIO()
     setup_logging(SECRETS, stream=stream)
-    isolated = logging.getLogger('isolated-logger')
+    # A fresh name: pytest attaches its capture handlers to every non-propagating logger that exists when a session
+    # starts, and mutmut runs several sessions in one process. A logger with handlers never reaches lastResort.
+    isolated = logging.getLogger(f'isolated-{uuid.uuid4().hex}')
     isolated.propagate = False
 
     isolated.warning('cannot reach %s', RPC)
@@ -66,6 +69,23 @@ def test_a_logger_without_handlers_that_does_not_propagate_is_masked_too(restore
     lines = stream.getvalue().splitlines()
     assert [json.loads(line)['msg'] for line in lines] == [f'cannot reach {MASKED_VALUE}']
     assert isinstance(logging.lastResort, SafeStreamHandler)
+
+
+def test_the_last_resort_handler_reports_a_write_error_masked_and_without_the_record(restore_logging, capsys):
+    class Broken(io.StringIO):
+        def write(self, text: str) -> int:
+            raise OSError('disk full')
+
+    setup_logging(SECRETS, stream=Broken())
+    isolated = logging.getLogger(f'isolated-{uuid.uuid4().hex}-{RPC}')
+    isolated.propagate = False
+
+    isolated.warning('cannot reach %s', RPC)
+
+    report = capsys.readouterr().err
+    assert '[logmask] Logging error: OSError' in report
+    assert MASKED_VALUE in report
+    assert_no_secret(report)
 
 
 def test_setup_logging_refuses_a_secret_of_an_unsupported_type(restore_logging):

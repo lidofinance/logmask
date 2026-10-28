@@ -213,7 +213,8 @@ def test_a_json_string_is_searched_as_the_container_it_encodes():
     account = json.dumps(
         {'type': 'service_account', 'private_key': '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg\n-----END PRIVATE KEY-----\n'}
     )
-    masker = SecretsMasker({'RPC': json.dumps([RPC, RPC_2]), 'ACCOUNT': account, 'NOT_JSON': '[not json'})
+    # The list has white space before it, as a value read from a file may have.
+    masker = SecretsMasker({'RPC': ' \n' + json.dumps([RPC, RPC_2]), 'ACCOUNT': account, 'NOT_JSON': '[not json'})
 
     assert masker.mask(f'connect {RPC} path /v3/secret-key-2') == f'connect {MASKED_VALUE} path {MASKED_VALUE}'
     assert masker.mask('key MIIEvQIBADANBg of type service_account') == f'key {MASKED_VALUE} of {MASKED_VALUE} {MASKED_VALUE}'
@@ -542,3 +543,16 @@ def test_repeated_add_does_not_keep_the_old_patterns_alive():
     # Without the fix the re cache holds every earlier pattern: tens of MiB after 60 rotations.
     assert retained < 8 * 2**20, f'{retained / 2**20:.1f} MiB retained'
     assert masker.mask('token-rotated-00059 token-start-00000') == f'{MASKED_VALUE} {MASKED_VALUE}'
+
+
+def test_a_two_line_value_is_masked_line_by_line():
+    masker = SecretsMasker({'TWO': 'two-line-a\ntwo-line-b'})
+
+    assert masker.mask('two-line-a then two-line-b') == f'{MASKED_VALUE} then {MASKED_VALUE}'
+
+
+def test_a_single_url_is_not_cut_at_a_comma_inside_it():
+    masker = SecretsMasker({'URL': 'https://h.example.com/p?ids=1,2'})
+
+    assert masker.mask('https://h.example.com/p?ids=1,2 ids=1,2') == f'{MASKED_VALUE} {MASKED_VALUE}'
+    assert masker.mask('ids=1 and 2') == 'ids=1 and 2'
