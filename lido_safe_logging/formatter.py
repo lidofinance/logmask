@@ -1,10 +1,12 @@
 import dataclasses
 import json
 import logging
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
 from .secrets import SecretsMasker
+
+UNPRINTABLE = '<unprintable>'
 
 
 def json_default(value: object) -> Any:
@@ -20,8 +22,19 @@ def json_default(value: object) -> Any:
     return str(value)
 
 
+def _safe(convert: Callable[[Any], str], value: Any) -> str:
+    try:
+        return convert(value)
+    except Exception:  # noqa: BLE001 - a __str__ or __repr__ that raises must not break the fallback line
+        return UNPRINTABLE
+
+
 class JsonFormatter(logging.Formatter):
-    """One JSON object per line with the fields the Lido bots use; every line goes through the masker."""
+    """One JSON object per line with a fixed set of record fields; every line goes through the masker.
+
+    `format()` never raises: a record that cannot be formatted becomes a line with an `error` field. Otherwise the
+    handler would report the error with the raw message and arguments, without masking.
+    """
 
     def __init__(self, masker: SecretsMasker | None = None):
         super().__init__()
@@ -30,10 +43,8 @@ class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         try:
             text = json.dumps(self._line(record), default=json_default)
-        except Exception as error:
-            # A record that cannot be formatted must not reach stderr through Handler.handleError, which prints the raw
-            # message and arguments without masking. The fallback line keeps the text, masked like every other line.
-            text = json.dumps(self._fallback_line(record, error), default=str)
+        except Exception as error:  # noqa: BLE001 - any formatting error must become a masked line, see the class docstring
+            text = json.dumps(self._fallback_line(record, error))
         # Secrets are hidden in every log line, including messages from third-party libraries.
         return self._masker.mask(text) if self._masker else text
 
@@ -50,13 +61,16 @@ class JsonFormatter(logging.Formatter):
 
     def _line(self, record: logging.LogRecord) -> dict[str, Any]:
         message = record.msg if isinstance(record.msg, dict) else {'msg': record.getMessage()}
-        line = {**self._base(record), **message}
+        line = self._base(record)
+        for key, value in message.items():
+            # The record fields win: a message key `name` or `timestamp` would break every query on them.
+            line[f'msg_{key}' if key in line else key] = value
         if record.exc_info:
             line['exc_info'] = self.formatException(record.exc_info)
         return line
 
     def _fallback_line(self, record: logging.LogRecord, error: Exception) -> dict[str, Any]:
-        line = {**self._base(record), 'msg': str(record.msg), 'error': f'Log record could not be formatted: {error!r}'}
+        line = {**self._base(record), 'msg': _safe(str, record.msg), 'error': f'Log record could not be formatted: {_safe(repr, error)}'}
         if record.args:
-            line['args'] = repr(record.args)
+            line['args'] = _safe(repr, record.args)
         return line

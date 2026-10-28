@@ -121,6 +121,66 @@ def test_json_formatter_masks_a_record_that_cannot_be_formatted():
     assert list(line)[:7] == ['name', 'levelname', 'funcName', 'lineno', 'module', 'pathname', 'timestamp']
 
 
+def test_message_keys_do_not_overwrite_the_record_fields():
+    record = make_record({'msg': 'login', 'name': 'alice', 'timestamp': 'yesterday', 'user': 'bob'})
+
+    line = json.loads(JsonFormatter().format(record))
+
+    assert line['name'] == 'test'
+    assert isinstance(line['timestamp'], int)
+    assert line['msg_name'] == 'alice'
+    assert line['msg_timestamp'] == 'yesterday'
+    assert line['user'] == 'bob'
+
+
+class Unprintable:
+    def __str__(self) -> str:
+        raise RuntimeError('no str')
+
+    __repr__ = __str__
+
+
+def test_fallback_line_survives_values_whose_repr_raises():
+    record = make_record('rate %d of %s %s', logging.INFO)
+    record.args = (Unprintable(), KEY, 'x')
+
+    line = json.loads(JsonFormatter(SecretsMasker(SECRETS)).format(record))
+
+    assert 'Log record could not be formatted' in line['error']
+    assert line['args'] == '<unprintable>'
+
+    record = make_record(Unprintable())
+    line = json.loads(JsonFormatter().format(record))
+
+    assert line['msg'] == '<unprintable>'
+
+
+def test_json_formatter_masks_a_secret_logged_as_repr_or_as_json():
+    secret = 'pa"ss\\w\nord-value'
+    formatter = JsonFormatter(SecretsMasker({'PASSWORD': secret}))
+
+    for message in (
+        f'got {secret!r}',
+        f'payload {json.dumps({"p": secret})}',
+        f'error {KeyError(secret)!s}',
+        f'config { ({"p": secret})!s}',
+    ):
+        line = formatter.format(make_record(message))
+
+        assert 'ord-value' not in line, line
+        assert MASKED_VALUE in line
+
+
+def test_json_formatter_masks_a_bytes_secret_logged_as_hex():
+    raw = bytes.fromhex('a1b2c3d4e5f6a7b8')
+    formatter = JsonFormatter(SecretsMasker({'KEY': raw}))
+
+    line = json.loads(formatter.format(make_record({'msg': 'key', 'raw': raw, 'hex': raw.hex().upper()})))
+
+    assert line['raw'] == MASKED_VALUE
+    assert line['hex'] == MASKED_VALUE
+
+
 def test_json_formatter_masks_a_dict_message_json_cannot_serialize():
     record = make_record({'msg': 'x', 'value': {(1, 2): KEY}})
 
