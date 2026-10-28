@@ -33,6 +33,12 @@ def test_masked_config_rejects_overlapping_keys():
         masked_config({'WALLET_PRIVATE_KEY': 'x'}, SECRETS)
 
 
+def test_masked_config_keeps_zero_false_and_the_keys_of_a_nested_mapping():
+    config = masked_config({}, {'A': 0, 'B': False, 'C': {'inner': {'token': 'secret-value', 'unset': None}}, 'D': b''})
+
+    assert config == {'A': MASKED_VALUE, 'B': MASKED_VALUE, 'C': {'inner': {'token': MASKED_VALUE, 'unset': ''}}, 'D': ''}
+
+
 def test_masked_config_masked_value_is_configurable():
     config = masked_config({}, {'A': 'secret-value', 'B': ['x', 'y']}, masked_value='[hidden]')
 
