@@ -33,3 +33,19 @@ jobs:
 
       - name: Tests
         run: poetry run pytest
+
+      - name: Build
+        run: poetry build
+
+      - name: No runtime dependencies in the wheel
+        run: |
+          python - <<'PY'
+          import glob, zipfile
+          wheel = glob.glob('dist/*.whl')[0]
+          with zipfile.ZipFile(wheel) as archive:
+              metadata = next(name for name in archive.namelist() if name.endswith('METADATA'))
+              lines = archive.read(metadata).decode().splitlines()
+          forbidden = [line for line in lines if line.startswith(('Requires-Dist:', 'Provides-Extra:'))]
+          assert not forbidden, f'{wheel} declares dependencies: {forbidden}'
+          print(f'{wheel}: no runtime dependencies')
+          PY

@@ -1,40 +1,44 @@
 # lido-safe-logging
 
-JSON logging with masked secrets for the Python services of Lido. One JSON object per line goes to the stream, and every line - including the messages of third-party libraries and the traceback of an unhandled exception - passes through a masker that replaces the configured secret values with `***`.
+JSON logging with masked secrets for Python services. One JSON object per line goes to the stream, and every line - including the messages of third-party libraries and the traceback of an unhandled exception - passes through a masker that replaces the configured secret values with `***`.
 
-The code comes from the NOR reward distribution bot and keeps the log format the Lido bots use (`name`, `levelname`, `funcName`, `lineno`, `module`, `pathname`, `timestamp`, the message keys).
+The library gives you:
+
+- `SecretsMasker` - replaces known secret values in any text, in their raw, stripped, URL and JSON-escaped forms
+- `JsonFormatter` - a `logging.Formatter` that writes one JSON object per record and masks the result
+- `install_excepthook` - sends unhandled exceptions of the main thread and of other threads through the logger
+- `masked_config` - builds a config dict for the startup log without reading the private values
+- `setup_logging` - one call that wires all of the above into the root logger
+- `mask_secrets_processor` - the same masking as a structlog processor (structlog is not a dependency of this package, your service brings its own)
+
+No runtime dependencies, by design: the package installs nothing besides itself, and a test plus a CI check keep it that way. Python 3.12 or newer.
 
 ## Install
 
-The package is distributed from this repository, not from PyPI. Pin a tag:
+Pin a tag:
 
 ```bash
 poetry add git+https://github.com/lidofinance/lido-safe-logging.git@v0.1.0
 ```
 
-With the structlog processor:
-
-```bash
-poetry add "lido-safe-logging[structlog] @ git+https://github.com/lidofinance/lido-safe-logging.git@v0.1.0"
-```
-
-The library has no runtime dependencies. A Docker build stage that installs it needs `git`.
+A Docker build stage that installs the package from git needs `git`.
 
 ## Usage
 
-### A bot with the standard `logging` module
+### Standard `logging`
 
 ```py
 import logging
 
 from lido_safe_logging import masked_config, setup_logging
 
-from variables import PRIVATE_ENV_VARS, PUBLIC_ENV_VARS
+PUBLIC = {'RPC_TIMEOUT': 30, 'DRY_RUN': True}
+PRIVATE = {'RPC_URL': 'https://user:password@rpc.example.com/v1', 'API_TOKEN': 'abcdef0123456789'}
 
-setup_logging(PRIVATE_ENV_VARS)
+setup_logging(PRIVATE)
 
 logger = logging.getLogger(__name__)
-logger.info({'msg': 'Bot env variables', 'value': masked_config(PUBLIC_ENV_VARS, PRIVATE_ENV_VARS)})
+logger.info({'msg': 'Config', 'value': masked_config(PUBLIC, PRIVATE)})
 ```
 
 `setup_logging` configures the root logger (JSON lines to stderr, level INFO), replaces the handlers that were there, and installs `sys.excepthook` and `threading.excepthook`, so that an unhandled exception is logged as one CRITICAL line with the masked traceback. It returns the `SecretsMasker` it built.
@@ -43,7 +47,7 @@ Options:
 
 ```py
 setup_logging(
-    PRIVATE_ENV_VARS,
+    PRIVATE,
     level='DEBUG',        # int or name, default INFO
     stream=sys.stdout,    # default stderr
     env_heuristic=True,   # also mask the values of env variables with SECRET, TOKEN, PASSWORD, PASS, PRIVATE, CREDENTIALS or KEY in the name
@@ -51,14 +55,14 @@ setup_logging(
 )
 ```
 
-`masked_config(public, private)` builds the dict for the startup log: public values as they are, private values replaced by `***`, a private list keeps its length, an unset private value becomes `''`. A variable listed in both mappings raises `ValueError`.
+`masked_config(public, private)` builds the dict for the startup log: public values as they are, private values replaced by `***`, a private list keeps its length, an unset private value becomes `''`. A key listed in both mappings raises `ValueError`.
 
 ### The pieces, when you need them one by one
 
 ```py
 from lido_safe_logging import JsonFormatter, SecretsMasker, install_excepthook
 
-masker = SecretsMasker(PRIVATE_ENV_VARS)
+masker = SecretsMasker(PRIVATE)
 handler = logging.StreamHandler()
 handler.setFormatter(JsonFormatter(masker))
 logging.basicConfig(level=logging.INFO, handlers=[handler])
@@ -74,7 +78,7 @@ import structlog
 
 from lido_safe_logging import SecretsMasker, mask_secrets_processor
 
-masker = SecretsMasker(PRIVATE_ENV_VARS)
+masker = SecretsMasker(PRIVATE)
 structlog.configure(
     processors=[
         structlog.processors.add_log_level,
@@ -85,7 +89,7 @@ structlog.configure(
 )
 ```
 
-After the renderer the processor masks the rendered line, keys and JSON-escaped forms included. Before the renderer it masks the string values of the event dict, nested lists and dicts too.
+After the renderer the processor masks the rendered line, keys and JSON-escaped forms included. Before the renderer it masks the string values of the event dict, nested lists and dicts too. The module does not import structlog: the processor is a plain function with the `(logger, method_name, event_dict)` contract.
 
 ## What is masked
 
@@ -103,7 +107,7 @@ Values shorter than 8 characters are not masked: they would hide ordinary text s
 
 ## What is not masked
 
-- a secret that is not in the mapping: masking is a list of known values, not a search for secret-looking text; keep `PRIVATE_ENV_VARS` complete, or add `env_heuristic=True`
+- a secret that is not in the mapping: masking is a list of known values, not a search for secret-looking text; keep the mapping complete, or add `env_heuristic=True`
 - a value that appears in a transformed form the masker does not know (base64, hex of the bytes, a part of a value shorter than 8 characters)
 - numbers and other non-string values in the secrets mapping (a numeric PIN has to be given as a string)
 - output written to stdout or stderr without the logger (`print`, a library that writes to the stream)
@@ -113,10 +117,10 @@ A record that cannot be formatted (wrong `%` arguments, a value `json` cannot se
 ## Log format
 
 ```json
-{"name": "bot", "levelname": "INFO", "funcName": "main", "lineno": 29, "module": "main", "pathname": "/app/src/main.py", "timestamp": 1761600000, "msg": "Bot env variables", "value": {"WEB3_RPC_ENDPOINTS": ["***", "***"]}}
+{"name": "app", "levelname": "INFO", "funcName": "main", "lineno": 29, "module": "main", "pathname": "/app/src/main.py", "timestamp": 1761600000, "msg": "Config", "value": {"RPC_URL": "***", "API_TOKEN": "***"}}
 ```
 
-- `timestamp` is the record time in whole seconds
+- every line has `name`, `levelname`, `funcName`, `lineno`, `module`, `pathname` and `timestamp` (the record time in whole seconds)
 - a dict message is merged into the line, a string message becomes `msg`
 - `exc_info` with the traceback is added for `logger.exception()` and `exc_info=True`
 - bytes are written as `0x`-hex, dataclasses as dicts, sets as lists, other unknown values as text
@@ -124,7 +128,7 @@ A record that cannot be formatted (wrong `%` arguments, a value `json` cannot se
 ## Development
 
 ```bash
-poetry install --all-extras
+poetry install
 poetry run ruff format --check . && poetry run ruff check . && poetry run pyright lido_safe_logging tests
 poetry run pytest
 ```

@@ -1,5 +1,5 @@
 name: Setup Python and Poetry
-description: Installs Python, Poetry (version from .poetry-version) and the project with all extras
+description: Installs Python, Poetry (version from .poetry-version) and the project with the dev group
 
 inputs:
   python-version:
@@ -23,5 +23,5 @@ runs:
       shell: bash
 
     - name: Install dependencies
-      run: poetry install --all-extras
+      run: poetry install
       shell: bash
