@@ -1,3 +1,6 @@
+# sys.UnraisableHookArgs exists only in the type stubs: the annotations must not be evaluated at runtime.
+from __future__ import annotations
+
 import contextlib
 import logging
 import sys
