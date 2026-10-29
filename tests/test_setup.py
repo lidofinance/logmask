@@ -42,6 +42,15 @@ def test_setup_logging_replaces_existing_handlers_and_sets_the_level(restore_log
     assert json.loads(stream.getvalue())['msg'] == 'debug line'
 
 
+def test_setup_logging_refuses_a_one_shot_iterator_before_touching_the_root_logger(restore_logging):
+    handlers = list(logging.getLogger().handlers)
+
+    with pytest.raises(TypeError, match='one-shot iterator'):
+        setup_logging({'K': iter(['secret-key-1'])}, stream=io.StringIO())
+
+    assert logging.getLogger().handlers == handlers
+
+
 def test_setup_logging_with_an_empty_mapping_masks_nothing_until_add(restore_logging):
     stream = io.StringIO()
 

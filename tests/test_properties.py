@@ -11,11 +11,11 @@ from logmask.formatter import JsonFormatter
 from logmask.secrets import MASKED_VALUE, SecretsMasker
 from tests.conftest import make_record
 
-ALPHABET = string.ascii_letters + string.digits + '"\'\\\n\t\x00\x7f /:@?&=+%#é€🔑'
+ALPHABET = string.ascii_letters + string.digits + '"\'\\\n\t\x00\x7f /:@?&=+%#'
 
 
 def random_secret(rng: random.Random) -> str:
-    # 6-20 characters from an alphabet with the JSON and repr special characters and non-ASCII text.
+    # 6-20 characters from an alphabet with the JSON and repr special characters (non-ASCII secrets are refused).
     length = rng.randint(6, 20)
     return ''.join(rng.choice(ALPHABET) for _ in range(length))
 

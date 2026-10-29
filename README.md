@@ -175,9 +175,9 @@ masker.mask('KEYS nested-secret-key nested-secret-value')
 # 'KEYS *** ***'
 ```
 
-A value of any other type (a plain object, a function, a module, a class) raises `TypeError` in `setup_logging`, `SecretsMasker`, `add()` and `masked_config`: the masker cannot promise to find every secret inside it, so it refuses the value instead of masking a part. Pass the data of such an object as a dict.
+A value of any other type (a plain object, a function, a module, a class) raises `TypeError` in `setup_logging`, `SecretsMasker`, `add()` and `masked_config`: the masker cannot promise to find every secret inside it, so it refuses the value instead of masking a part. Pass the data of such an object as a dict. A one-shot iterator (a generator, `map()`, an open file) and a string or a path with non-ASCII characters are refused the same way: pass a list and ASCII values.
 
-The values held by one string: a JSON document is searched as the container it encodes (a list of URLs, the JSON of a service account with its `private_key`), several URLs separated by commas, semicolons or white space are searched one by one, and every line of a multi-line value (a PEM key) is a secret on its own:
+The values held by one string: a JSON document is searched as the container it encodes (a list of URLs, the JSON of a service account with its `private_key`), several URLs separated by commas, semicolons or white space are searched one by one, and every line of a multi-line value (a PEM key) is a secret on its own (with real newlines or with the two characters `\n`):
 
 ```py
 masker = SecretsMasker({'RPC_LIST': 'https://one.example.com/key/abcdef123456,https://two.example.com/key/ghijkl789012'})
@@ -230,11 +230,13 @@ masker.mask(repr(bytes.fromhex('ABCDEF0123456789')))
 # "b'***'"
 ```
 
-The value percent-encoded (with `quote` and with `quote_plus`), percent-decoded, base64-encoded, and as the hex or the `repr()` of its bytes, as an application writes it into a URL, a header or a bytes body:
+The value percent-encoded (with `quote` and with `quote_plus`), percent-decoded, base64-encoded, and as the hex or the `repr()` of its bytes, as an application writes it into a URL, a header or a bytes body, and inside an HTTP Basic header after any user name:
 
 ```py
 SecretsMasker({'T': 'tok/en+value=1'}).mask('k=tok%2Fen%2Bvalue%3D1 auth dG9rL2VuK3ZhbHVlPTE= body 0x746f6b2f656e2b76616c75653d31')
 # 'k=*** auth *** body 0x***'
+SecretsMasker({'PASSWORD': 'hunter2hunter2'}).mask('Basic cm9vdDpodW50ZXIyaHVudGVyMg==')
+# 'Basic cm9vdDp***'
 ```
 
 A value shown with `repr()`, inside `str(dict)`, in an exception text or inside a JSON document, up to two layers deep (for example the `repr()` of a JSON document). Quotes, backslashes and newlines in the secret are not a problem, and a secret made of JSON syntax (a quote, a brace, `true`) is masked inside the strings of the line, so the line stays valid JSON:
@@ -284,6 +286,8 @@ masker.mask('prefix a1b2c3')
 ```
 
 A short word of a URL on its own (see above).
+
+A secret with non-ASCII characters: not supported, `TypeError`. Use ASCII secrets.
 
 A password re-encoded by an HTTP library with its own set of safe characters. The masker knows the password raw, percent-decoded and in the three encodings of `urllib.parse` (`quote` with and without the default safe characters, `quote_plus`). yarl, used by aiohttp, keeps `+ ! & =` raw and encodes the rest, so `p%40ss+x!y` is a form the masker does not know, and only the user name and the host of such a URL are masked. A per-character pattern for the credentials (each character raw or percent-encoded) is planned; until then, prefer a password without characters that need encoding.
 
