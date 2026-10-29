@@ -12,6 +12,7 @@ dependencies = []
 
 [project.urls]
 Repository = "https://github.com/lidofinance/logmask"
+Changelog = "https://github.com/lidofinance/logmask/blob/main/CHANGELOG.md"
 
 [tool.poetry]
 packages = [{ include = "logmask" }]

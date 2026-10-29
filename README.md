@@ -6,11 +6,20 @@ No runtime dependencies. Python 3.12 or newer.
 
 ## Install
 
+The package is on PyPI as [`logmask`](https://pypi.org/project/logmask/):
+
 ```bash
-poetry add git+https://github.com/lidofinance/logmask.git@v0.1.3
+poetry add logmask
+pip install logmask
 ```
 
-Pin a tag, or a commit with `rev`, and commit `poetry.lock`: it records the exact commit. Poetry clones the repository itself; a build stage that installs with `pip` needs `git`.
+The versions and their changes are in `CHANGELOG.md`.
+
+A commit that is not released yet can be installed from the repository; a build stage that installs this way needs `git`:
+
+```bash
+poetry add "git+https://github.com/lidofinance/logmask.git@<commit or tag>"
+```
 
 ## Quick start
 
@@ -358,5 +367,5 @@ About 50 mutants survive by design (the spelling of `utf-8`, the wording of mess
 ## Release
 
 1. Set the version in `pyproject.toml` and move the `Unreleased` section of `CHANGELOG.md` under the version and the date.
-2. Merge to `main` and create the tag `vX.Y.Z`.
-3. Consumers update the tag in their `pyproject.toml` and run `poetry lock`.
+2. Merge to `main` and publish a GitHub release with the tag `vX.Y.Z` on that commit. The `Publish` workflow builds the package and uploads it to PyPI through trusted publishing (no API token in the repository); it refuses a tag that does not match the version in `pyproject.toml`.
+3. Consumers update the version in their `pyproject.toml` and run `poetry lock`.
