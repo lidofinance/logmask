@@ -1,6 +1,6 @@
 [project]
 name = "logmask"
-version = "0.1.4"
+version = "0.1.5"
 description = "JSON logging with masked secrets for Python services"
 readme = "README.md"
 license = "MIT"
