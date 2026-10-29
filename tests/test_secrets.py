@@ -1,5 +1,6 @@
 import base64
 import dataclasses
+import io
 import json
 from urllib.parse import quote
 
@@ -41,6 +42,50 @@ def test_basic_auth_header_of_a_url_password_is_masked():
     header = base64.b64encode(b'user:s3cret-pass-word').decode()
 
     assert masker.mask(f'Authorization: Basic {header}') == f'Authorization: Basic {MASKED_VALUE}'
+
+
+# Passwords of every length modulo 3; the last one encodes to `+` and `/` (standard) or `-` and `_` (URL-safe).
+PASSWORDS = ['hunter2hunter', 'hunter2hunter2', 'hunter2hunter2!', '??>>??>>??>>??']
+
+
+def base64_span(prefix: bytes, secret: bytes, tail: bytes, encoded: str) -> tuple[int, int]:
+    """The characters of base64(prefix + secret + tail) whose bits come from the secret alone.
+
+    A character that mixes prefix bits with secret bits stays visible, and so does a character that mixes secret bits
+    with the bits of the tail; without a tail the padding belongs to the secret and the span runs to the end.
+    """
+    shift = len(prefix) % 3
+    start = 4 * (len(prefix) // 3) + (shift + 1 if shift else 0)
+    if not tail:
+        return start, len(encoded)
+    end_byte = len(prefix) + len(secret)
+    return start, 4 * (end_byte // 3) + end_byte % 3
+
+
+@pytest.mark.parametrize('password', PASSWORDS)
+@pytest.mark.parametrize('user', ['root', 'bob', 'admin', '', 'a-longer-user-name'])
+def test_basic_auth_header_of_a_plain_password_is_masked_after_any_user_name(user, password):
+    # `user:` shifts the password by 1, 2 or 0 bytes inside the base64 groups; every alignment is a form.
+    masker = SecretsMasker({'PASSWORD': password})
+    prefix = f'{user}:'.encode()
+    header = base64.b64encode(prefix + password.encode()).decode()
+    start, _ = base64_span(prefix, password.encode(), b'', header)
+
+    assert masker.mask(f'Authorization: Basic {header}') == f'Authorization: Basic {header[:start]}{MASKED_VALUE}'
+
+
+@pytest.mark.parametrize('password', PASSWORDS)
+@pytest.mark.parametrize('encode', [base64.b64encode, base64.urlsafe_b64encode], ids=['standard', 'urlsafe'])
+def test_base64_of_a_secret_inside_a_longer_value_is_masked_exactly_at_any_alignment(encode, password):
+    masker = SecretsMasker({'PASSWORD': password})
+
+    for prefix in (b'', b'x', b'xy', b'xyz', b'root:'):
+        # A tail starts with a byte whose top bits are set, so its mixed character differs from the padding one.
+        for tail in (b'', b'~', b'~~', b'~and-a-tail'):
+            encoded = encode(prefix + password.encode() + tail).decode()
+            start, end = base64_span(prefix, password.encode(), tail, encoded)
+
+            assert masker.mask(encoded) == f'{encoded[:start]}{MASKED_VALUE}{encoded[end:]}', (prefix, tail, encoded)
 
 
 def test_whole_path_is_masked_but_a_plain_word_of_it_is_not():
@@ -100,7 +145,7 @@ def test_masking_ignores_the_case_of_any_value():
 
 
 def test_repr_and_json_forms_of_a_secret_are_masked():
-    secret = 'pa"ss\\w\nordé-value'
+    secret = 'pa"ss\\w\nord-value'
     masker = SecretsMasker({'PASSWORD': secret})
 
     for text in (repr(secret), str({'p': secret}), json.dumps({'p': secret}), str(KeyError(secret))):
@@ -144,7 +189,7 @@ def test_none_and_empty_values_are_not_secrets():
     assert repr(masker) == 'SecretsMasker(0 forms)'
 
 
-@pytest.mark.parametrize(('value', 'logged'), [('ab1', 'ab1'), (1234, '1234'), (['x1', 'secret-value-9'], 'x1'), ('é', 'é')])
+@pytest.mark.parametrize(('value', 'logged'), [('ab1', 'ab1'), (1234, '1234'), (['x1', 'secret-value-9'], 'x1'), ('a', 'a')])
 def test_a_private_value_is_masked_whatever_its_length(value, logged):
     masker = SecretsMasker({'SHORT': value})
 
@@ -309,9 +354,10 @@ def test_masker_without_secrets_keeps_the_text():
 def test_a_text_secret_is_masked_as_the_hex_and_repr_of_its_bytes():
     # json_default writes bytes as 0x-hex: a token inside a logged response body comes out as hex.
     token = 'lido-ipfs-token-0123456789'
-    masker = SecretsMasker({'T': token, 'P': 'pässword-12'})
+    tabbed = b'pass\tw0rd-12'  # its repr differs from its text, so the repr form is checked on its own
+    masker = SecretsMasker({'T': token, 'P': tabbed.decode()})
 
-    masked = masker.mask(f'0x{token.encode().hex()} {token.encode().hex().upper()} {"pässword-12".encode()!r} {token.encode()!r}')
+    masked = masker.mask(f'0x{token.encode().hex()} {token.encode().hex().upper()} {tabbed!r} {token.encode()!r}')
 
     assert masked == f"0x{MASKED_VALUE} {MASKED_VALUE} b'{MASKED_VALUE}' b'{MASKED_VALUE}'"
 
@@ -322,10 +368,10 @@ def test_a_hex_key_is_masked_as_the_bytes_it_encodes():
     assert masker.mask(repr(bytes.fromhex('ab' * 32))) == f"b'{MASKED_VALUE}'"
 
 
-def test_a_value_with_a_lone_surrogate_is_accepted_and_masked():
-    secret = 'abc\udcff-12345'
-
-    assert SecretsMasker({'K': secret}).mask(f'got {secret} and abc') == f'got {MASKED_VALUE} and abc'
+def test_a_value_with_a_lone_surrogate_is_refused_as_non_ascii():
+    # An environment value with a byte that is not UTF-8 is decoded with surrogateescape: not ASCII, so not supported.
+    with pytest.raises(TypeError, match='non-ASCII'):
+        SecretsMasker({'K': 'abc\udcff-12345'})
 
 
 def test_bytes_that_are_not_utf8_are_masked_in_the_surrogateescape_form():
@@ -348,9 +394,62 @@ def test_form_encoded_and_percent_encoded_secrets_are_masked_decoded_and_encoded
 def test_other_iterables_are_searched_for_secrets():
     from collections import deque
 
-    masker = SecretsMasker({'D': deque(['deque-secret-1']), 'I': iter(['iter-secret-1']), 'M': memoryview(b'view-secret-1')})
+    masker = SecretsMasker({'D': deque(['deque-secret-1']), 'V': {'view-secret-1': 1}.keys(), 'M': memoryview(b'view-secret-2')})
 
-    assert masker.mask('deque-secret-1 iter-secret-1 view-secret-1') == ' '.join([MASKED_VALUE] * 3)
+    assert masker.mask('deque-secret-1 view-secret-1 view-secret-2') == ' '.join([MASKED_VALUE] * 3)
+
+
+@pytest.mark.parametrize(
+    'make',
+    [
+        lambda: (item for item in ['gen-secret-1']),
+        lambda: iter(['iter-secret-1']),
+        lambda: map(str.strip, [' map-secret-1 ']),
+        lambda: io.StringIO('file-secret-1'),
+    ],
+    ids=['generator', 'iterator', 'map', 'file'],
+)
+def test_a_one_shot_iterator_is_refused_at_init_and_in_add(make):
+    # A generator is empty after one pass: masked_config would consume it and setup_logging would then find no secret
+    # in it, without any error. The masker refuses it instead, like any value it cannot search completely.
+    value = make()
+    with pytest.raises(TypeError, match=f'type {type(value).__name__} is a one-shot iterator'):
+        SecretsMasker({'G': value})
+    masker = SecretsMasker({})
+    with pytest.raises(TypeError, match='pass a list, a tuple or a set'):
+        masker.add({'G': make()})
+    with pytest.raises(TypeError, match='one-shot iterator'):
+        masker.add({'nested': {'inner': [make()]}})
+    assert repr(masker) == 'SecretsMasker(0 forms)'
+
+
+@pytest.mark.parametrize(
+    'value',
+    ['Pässwörd12', {'nested': 'kéy-value-1'}, {'kéy-name-1': 'value'}, ['x', 'Ünïcode-1'], '["jsön-value-1"]'],
+    ids=['string', 'nested value', 'nested key', 'list item', 'json string'],
+)
+def test_a_non_ascii_string_is_refused_and_not_shown_in_the_error(value):
+    # The JSON line escapes non-ASCII text (`\u00e4`), and the escape has one case only: such a secret logged in another
+    # case would be missed, so non-ASCII secrets are not supported.
+    with pytest.raises(TypeError, match='non-ASCII characters is not supported') as error:
+        SecretsMasker({'P': value})
+    assert str(error.value).isascii()
+    masker = SecretsMasker({})
+    with pytest.raises(TypeError, match='non-ASCII'):
+        masker.add({'P': value})
+    assert repr(masker) == 'SecretsMasker(0 forms)'
+
+
+def test_non_ascii_bytes_are_still_accepted_and_a_non_ascii_path_is_refused():
+    from pathlib import PurePosixPath
+
+    # A bytes value is binary (a raw key): its hex and repr forms are the ones a log shows, its text is best effort.
+    raw = 'k\xe9y-bytes-1'.encode('latin-1')
+    masker = SecretsMasker({'B': raw, 'N': 12345678, 'P': PurePosixPath('/secret/path-1')})
+
+    assert masker.mask(f'{raw.hex()} 12345678 /secret/path-1 {raw!r}') == f"{MASKED_VALUE} {MASKED_VALUE} {MASKED_VALUE} b'{MASKED_VALUE}'"
+    with pytest.raises(TypeError, match='non-ASCII'):
+        SecretsMasker({'P': PurePosixPath('/sécret/path-1')})
 
 
 class Opaque:
@@ -549,6 +648,37 @@ def test_a_two_line_value_is_masked_line_by_line():
     masker = SecretsMasker({'TWO': 'two-line-a\ntwo-line-b'})
 
     assert masker.mask('two-line-a then two-line-b') == f'{MASKED_VALUE} then {MASKED_VALUE}'
+
+
+@pytest.mark.parametrize('newline', ['\\n', '\\r\\n'], ids=['backslash-n', 'backslash-r-n'])
+def test_a_multi_line_value_with_literal_newlines_is_masked_line_by_line(newline):
+    # An environment variable holds a PEM key with the two characters `\n` between the lines; the application turns them
+    # into real newlines and a library prints the key line by line.
+    pem = newline.join(['-----BEGIN KEY-----', 'line-one-1', 'line-two-2', '-----END KEY-----'])
+    masker = SecretsMasker({'PEM': pem})
+
+    assert (
+        masker.mask('got line-one-1 then line-two-2 after -----BEGIN KEY-----')
+        == f'got {MASKED_VALUE} then {MASKED_VALUE} after {MASKED_VALUE}'
+    )
+    assert masker.mask(pem) == MASKED_VALUE
+    # JSON-encoded, as the formatter writes it, the real newlines of the value become the two characters again.
+    real = pem.replace(newline, newline.replace('\\r', '\r').replace('\\n', '\n'))
+    assert masker.mask(json.dumps(real)) == f'"{MASKED_VALUE}"'
+
+
+def test_literal_newline_pieces_are_stripped_and_empty_ones_are_skipped():
+    masker = SecretsMasker({'PEM': '-----BEGIN-----\\n  body-line-1  \\n\\nab\\n-----END-----\\n'})
+
+    assert masker.mask('body-line-1 and ab alone') == f'{MASKED_VALUE} and {MASKED_VALUE} alone'
+    assert masker.mask('plain text') == 'plain text'
+    assert '' not in masker._forms and '  body-line-1  ' not in masker._forms
+
+
+def test_a_value_with_real_and_literal_newlines_is_split_on_both():
+    masker = SecretsMasker({'MIXED': 'line-aaa-1\nline-bbb-2\\nline-ccc-3\nline-ddd-4'})
+
+    assert masker.mask('line-aaa-1 line-bbb-2 line-ccc-3 line-ddd-4') == ' '.join([MASKED_VALUE] * 4)
 
 
 def test_a_single_url_is_not_cut_at_a_comma_inside_it():

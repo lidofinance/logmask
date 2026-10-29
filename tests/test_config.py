@@ -33,6 +33,21 @@ def test_masked_config_rejects_a_private_value_the_masker_cannot_search():
         masked_config({}, {'OPAQUE': object()})
 
 
+def test_masked_config_rejects_a_one_shot_iterator_instead_of_consuming_it():
+    # masked_config is often called before setup_logging with the same mapping: a consumed generator would leave the
+    # second call without the secret and without an error.
+    urls = (url for url in ['https://rpc.example/v3/secret-key-1'])
+    with pytest.raises(TypeError, match='one-shot iterator'):
+        masked_config({}, {'WEB3_RPC_ENDPOINTS': urls})
+    with pytest.raises(TypeError, match='one-shot iterator'):
+        masked_config({}, {'NESTED': {'urls': iter(['secret-key-1'])}})
+
+
+def test_masked_config_rejects_a_non_ascii_private_value():
+    with pytest.raises(TypeError, match='non-ASCII'):
+        masked_config({}, {'PASSWORD': 'Pässwörd12'})
+
+
 def test_masked_config_rejects_overlapping_keys():
     with pytest.raises(ValueError, match='WALLET_PRIVATE_KEY'):
         masked_config({'WALLET_PRIVATE_KEY': 'x'}, SECRETS)

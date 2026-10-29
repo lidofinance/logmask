@@ -26,6 +26,7 @@ _ENCODED_FORMS_MIN_LENGTH = 4
 _ESCAPE_DEPTH = 2
 
 _HEX = re.compile(r'(0x)?([0-9a-f]+)', re.ASCII | re.IGNORECASE)
+_LITERAL_NEWLINE = re.compile(r'(?:\\r)?\\n')
 
 
 def _key_fragment(text: str) -> bool:
@@ -50,6 +51,26 @@ def _hex_forms(text: str) -> Iterator[str]:
         yield repr(bytes.fromhex(digits))[2:-1]
 
 
+def _base64_forms(raw: bytes) -> Iterator[str]:
+    """The base64 of the value at the three byte alignments: on its own, and after a prefix of 1 or 2 bytes.
+
+    An HTTP Basic header is the base64 of `user:password`, so the password starts at any offset of a 3-byte group, and
+    its encoding depends on the offset. After a prefix of 1 or 2 bytes the first `shift + 1` characters hold bits of the
+    prefix and are dropped. The last character may hold bits of the padding or of the bytes that follow: both forms are
+    yielded, the full one for a value at the end of the text (the header case) and the one without the last character
+    for a value followed by more bytes.
+    """
+    for shift in range(3):
+        for encode in (base64.b64encode, base64.urlsafe_b64encode):
+            encoded = encode(bytes(shift) + raw).decode()
+            start = shift + 1 if shift else 0
+            yield encoded[start:]
+            unpadded = encoded[start:].rstrip('=')
+            yield unpadded
+            if (shift + len(raw)) % 3:
+                yield unpadded[:-1]
+
+
 def _encoded_forms(text: str) -> Iterator[str]:
     """The forms an application gives a raw secret when it builds a URL, a header or a bytes value from it."""
     if len(text) < _ENCODED_FORMS_MIN_LENGTH:
@@ -58,12 +79,10 @@ def _encoded_forms(text: str) -> Iterator[str]:
     yield quote(text, safe='', errors='surrogateescape')
     yield quote(text, errors='surrogateescape')
     yield quote_plus(text, errors='surrogateescape')
-    for encoded in (base64.b64encode(raw), base64.urlsafe_b64encode(raw)):
-        yield encoded.decode()
-        yield encoded.decode().rstrip('=')
+    yield from _base64_forms(raw)
     # json_default writes a bytes value as 0x-hex; a text secret inside such a value must be found in that form too.
+    # The repr() of the bytes of an ASCII text is the repr() of the text itself, which `_escaped_forms` covers.
     yield raw.hex()
-    yield repr(raw)[2:-1]
 
 
 def _with_decoded(text: str) -> Iterator[str]:
@@ -142,14 +161,19 @@ def _escaped_forms(text: str) -> set[str]:
     return forms
 
 
-SUPPORTED_TYPES = 'str, bytes, a number, a path, a mapping, a list or another iterable, a dataclass or an object with get_secret_value()'
+NON_ASCII_ERROR = 'A private value with non-ASCII characters is not supported, use ASCII values'
+SUPPORTED_TYPES = (
+    'str, bytes, a number, a path, a mapping, a list or another iterable, a dataclass or an object with get_secret_value() '
+    '(ASCII text only, no one-shot iterator)'
+)
 
 
 def _strings_inside(text: str, seen: dict[int, object]) -> Iterator[str]:
     """The values held by one string: a JSON document (a list of URLs, the JSON of a service account) is searched as
     the container it encodes, several URLs separated by commas, semicolons or white space are searched one by one
     (otherwise only the last URL would get its parts, the others would be plain prefixes of the value), and every
-    line of a multi-line value (a PEM key) is a secret on its own, as a library prints it line by line."""
+    line of a multi-line value (a PEM key) is a secret on its own, as a library prints it line by line; the two
+    characters `\n` (or `\r\n`) split the value like a real newline."""
     if text.lstrip()[:1] in ('[', '{'):
         try:
             document = json.loads(text)
@@ -161,7 +185,9 @@ def _strings_inside(text: str, seen: dict[int, object]) -> Iterator[str]:
     urls = [piece for piece in re.split(r'[,;\s]+', text) if '://' in piece]
     if len(urls) > 1:
         yield from urls
-    lines = [line.strip() for line in text.splitlines()]
+    # An environment variable holds the newlines of a PEM key as the two characters `\n`; the application turns them
+    # into real newlines before use. Both kinds of newline split the value.
+    lines = [piece.strip() for line in text.splitlines() for piece in _LITERAL_NEWLINE.split(line)]
     if len(lines) > 1:
         yield from (line for line in lines if line)
 
@@ -171,7 +197,9 @@ def _strings(value: object, seen: dict[int, object]) -> Iterator[str]:
     in their text, hex and repr forms, the items of containers and other iterables (the keys of a nested mapping are
     data, like its values; the keys of the top-level mapping are the variable names and never reach here), the fields
     of a dataclass, the wrapped value of a SecretStr-like object, numbers and paths as text. None and bool are not
-    secrets. Any other type is refused: the masker cannot promise that it found every secret inside it.
+    secrets. Any other type is refused: the masker cannot promise that it found every secret inside it. A one-shot
+    iterator is refused because it is empty on the second pass, and a non-ASCII string because its JSON escape has one
+    case only.
 
     `seen` keeps a reference to every container visited, so that a cycle stops and a freed temporary cannot hand its
     id to a later container that would then be skipped.
@@ -179,6 +207,10 @@ def _strings(value: object, seen: dict[int, object]) -> Iterator[str]:
     if value is None or isinstance(value, bool):
         return
     if isinstance(value, str):
+        if not value.isascii():
+            # The JSON line holds non-ASCII text as `\uXXXX` escapes, which have one case only: such a secret logged in
+            # another case would be missed. The error names no part of the value.
+            raise TypeError(NON_ASCII_ERROR)
         yield value
         yield from _strings_inside(value, seen)
     elif isinstance(value, bytes | bytearray | memoryview):
@@ -187,8 +219,11 @@ def _strings(value: object, seen: dict[int, object]) -> Iterator[str]:
         yield raw.hex()
         yield repr(raw)[2:-1]
     elif isinstance(value, numbers.Number | os.PathLike):
-        # Whatever text the value shows in a log is a secret too.
-        yield str(value)
+        # Whatever text the value shows in a log is a secret too; a path is text and follows the ASCII rule.
+        text = str(value)
+        if not text.isascii():
+            raise TypeError(NON_ASCII_ERROR)
+        yield text
     elif id(value) in seen:
         return
     elif isinstance(value, Mapping):
@@ -196,6 +231,12 @@ def _strings(value: object, seen: dict[int, object]) -> Iterator[str]:
         for key, item in value.items():
             yield from _strings(key, seen)
             yield from _strings(item, seen)
+    elif isinstance(value, Iterator):
+        # A generator, map() or a file is empty after one pass: masked_config would consume it and setup_logging would
+        # then find no secret in it, without any error.
+        raise TypeError(
+            f'A private value of type {type(value).__name__} is a one-shot iterator and is not supported, pass a list, a tuple or a set'
+        )
     elif isinstance(value, Iterable):
         seen[id(value)] = value
         for item in value:

@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-10-29
+
+### Fixed
+
+- A password used in an HTTP Basic header was masked only when `user:` happened to be a multiple of 3 bytes: base64 encodes 3-byte groups, so the same password has three encodings depending on its offset. The base64 forms of a secret are now derived at every offset, for the standard and the URL-safe alphabets.
+- A multi-line value stored with the two characters `\n` between the lines (a PEM key in an environment variable) was split into lines only on real newlines, so one line of the key logged on its own was written in clear. The literal `\n` and `\r\n` sequences split the value too.
+
+### Changed
+
+- A one-shot iterator as a private value (a generator, `map()`, an open file) raises `TypeError`. Before, the first pass consumed it: `masked_config` followed by `setup_logging` with the same mapping masked nothing from it, without an error.
+- A private value with non-ASCII characters raises `TypeError`: the JSON line writes such text as `\uXXXX` escapes, which have one case only, so the value was masked only in the case it was set in. Non-ASCII secrets are not supported.
+
 ## [0.1.3] - 2026-10-29
 
 ### Fixed
