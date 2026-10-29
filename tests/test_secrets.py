@@ -354,9 +354,10 @@ def test_masker_without_secrets_keeps_the_text():
 def test_a_text_secret_is_masked_as_the_hex_and_repr_of_its_bytes():
     # json_default writes bytes as 0x-hex: a token inside a logged response body comes out as hex.
     token = 'lido-ipfs-token-0123456789'
-    masker = SecretsMasker({'T': token, 'P': 'passw0rd-12'})
+    tabbed = b'pass\tw0rd-12'  # its repr differs from its text, so the repr form is checked on its own
+    masker = SecretsMasker({'T': token, 'P': tabbed.decode()})
 
-    masked = masker.mask(f'0x{token.encode().hex()} {token.encode().hex().upper()} {b"passw0rd-12"!r} {token.encode()!r}')
+    masked = masker.mask(f'0x{token.encode().hex()} {token.encode().hex().upper()} {tabbed!r} {token.encode()!r}')
 
     assert masked == f"0x{MASKED_VALUE} {MASKED_VALUE} b'{MASKED_VALUE}' b'{MASKED_VALUE}'"
 
@@ -411,8 +412,9 @@ def test_other_iterables_are_searched_for_secrets():
 def test_a_one_shot_iterator_is_refused_at_init_and_in_add(make):
     # A generator is empty after one pass: masked_config would consume it and setup_logging would then find no secret
     # in it, without any error. The masker refuses it instead, like any value it cannot search completely.
-    with pytest.raises(TypeError, match='one-shot iterator'):
-        SecretsMasker({'G': make()})
+    value = make()
+    with pytest.raises(TypeError, match=f'type {type(value).__name__} is a one-shot iterator'):
+        SecretsMasker({'G': value})
     masker = SecretsMasker({})
     with pytest.raises(TypeError, match='pass a list, a tuple or a set'):
         masker.add({'G': make()})
@@ -442,9 +444,10 @@ def test_non_ascii_bytes_are_still_accepted_and_a_non_ascii_path_is_refused():
     from pathlib import PurePosixPath
 
     # A bytes value is binary (a raw key): its hex and repr forms are the ones a log shows, its text is best effort.
-    masker = SecretsMasker({'B': 'k\xe9y-bytes-1'.encode('latin-1'), 'N': 12345678, 'P': PurePosixPath('/secret/path-1')})
+    raw = 'k\xe9y-bytes-1'.encode('latin-1')
+    masker = SecretsMasker({'B': raw, 'N': 12345678, 'P': PurePosixPath('/secret/path-1')})
 
-    assert masker.mask('6be9792d62797465732d31 12345678 /secret/path-1') == ' '.join([MASKED_VALUE] * 3)
+    assert masker.mask(f'{raw.hex()} 12345678 /secret/path-1 {raw!r}') == f"{MASKED_VALUE} {MASKED_VALUE} {MASKED_VALUE} b'{MASKED_VALUE}'"
     with pytest.raises(TypeError, match='non-ASCII'):
         SecretsMasker({'P': PurePosixPath('/sécret/path-1')})
 

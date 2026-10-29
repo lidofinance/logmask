@@ -81,8 +81,8 @@ def _encoded_forms(text: str) -> Iterator[str]:
     yield quote_plus(text, errors='surrogateescape')
     yield from _base64_forms(raw)
     # json_default writes a bytes value as 0x-hex; a text secret inside such a value must be found in that form too.
+    # The repr() of the bytes of an ASCII text is the repr() of the text itself, which `_escaped_forms` covers.
     yield raw.hex()
-    yield repr(raw)[2:-1]
 
 
 def _with_decoded(text: str) -> Iterator[str]:
