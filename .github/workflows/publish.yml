@@ -14,7 +14,7 @@ jobs:
     environment: release
     permissions:
       contents: read
-      # PyPI trusted publishing: the OIDC token replaces an API token.
+      # PyPI trusted publishing (the OIDC token replaces an API token) and the Sigstore signing of the attestations.
       id-token: write
 
     steps:
@@ -41,8 +41,23 @@ jobs:
       - name: Build
         run: poetry build --no-interaction
 
+      - name: Install the publish tools
+        # Release-only tools, in their own venv outside the lock file: the package must keep no runtime dependencies.
+        # Poetry cannot upload attestations, twine can.
+        run: |
+          python -m venv "$RUNNER_TEMP/publish"
+          "$RUNNER_TEMP/publish/bin/pip" install --quiet "pypi-attestations==0.0.30" "twine==7.0.0"
+
+      - name: Sign the distributions
+        # PEP 740 attestations, signed by Sigstore with the OIDC identity of this job (the same workflow and
+        # environment as the trusted publisher). Writes dist/<file>.publish.attestation next to every file.
+        timeout-minutes: 5
+        run: |
+          "$RUNNER_TEMP/publish/bin/python" -m pypi_attestations sign dist/*.whl dist/*.tar.gz
+          ls -l dist/
+
       - name: Publish to PyPI
         run: |
-          POETRY_PYPI_TOKEN_PYPI=$(.github/scripts/pypi_oidc_token.sh pypi.org)
-          export POETRY_PYPI_TOKEN_PYPI
-          poetry publish --no-interaction --no-ansi
+          TWINE_PASSWORD=$(.github/scripts/pypi_oidc_token.sh pypi.org)
+          export TWINE_PASSWORD TWINE_USERNAME=__token__
+          "$RUNNER_TEMP/publish/bin/twine" upload --non-interactive --attestations dist/*
